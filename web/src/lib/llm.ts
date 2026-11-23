@@ -98,6 +98,55 @@ async function resolveClaudeCliPath(): Promise<string> {
   return pick;
 }
 
+/**
+ * Claude via CLI sometimes ends long nested JSON with `end_turn` but one closing
+ * brace short (observed: `..."}` instead of `..."}}`). If — and only if — the text
+ * is valid JSON once the missing closers are appended (outside any string), return
+ * the repaired text. Any other malformation is returned untouched so it still fails.
+ */
+export function repairUnclosedJson(text: string): { text: string; repaired: string | null } {
+  let body = text.trim();
+  const fenced = body.match(/^```(?:json)?\s*([\s\S]*?)\s*```$/);
+  if (fenced) body = fenced[1].trim();
+  try {
+    JSON.parse(body);
+    return { text, repaired: null };
+  } catch {
+    /* try to repair below */
+  }
+  const start = body.search(/[{[]/);
+  if (start === -1) return { text, repaired: null };
+  body = body.slice(start);
+
+  const stack: string[] = [];
+  let inString = false;
+  let escaped = false;
+  for (const ch of body) {
+    if (inString) {
+      if (escaped) escaped = false;
+      else if (ch === "\\") escaped = true;
+      else if (ch === '"') inString = false;
+      continue;
+    }
+    if (ch === '"') inString = true;
+    else if (ch === "{") stack.push("}");
+    else if (ch === "[") stack.push("]");
+    else if (ch === "}" || ch === "]") {
+      if (stack.pop() !== ch) return { text, repaired: null }; // mismatched: don't guess
+    }
+  }
+  if (inString || stack.length === 0) return { text, repaired: null };
+
+  const closers = stack.reverse().join("");
+  const candidate = body + closers;
+  try {
+    JSON.parse(candidate);
+    return { text: candidate, repaired: closers };
+  } catch {
+    return { text, repaired: null };
+  }
+}
+
 /** Env vars stripped from the CLI child process. */
 export const CLAUDE_CLI_STRIPPED_ENV = [
   // Force subscription auth: never let the CLI pick up a paid API key/proxy.
@@ -204,7 +253,16 @@ async function runClaudeCli({
     child.on("close", (code) => {
       finish(() => {
         const text = stdout.trim();
-        if (code === 0 && text) return resolve(text);
+        if (code === 0 && text) {
+          if (jsonMode) {
+            const fixed = repairUnclosedJson(text);
+            if (fixed.repaired) {
+              console.warn(`[claude_cli] JSON response was missing closer(s) "${fixed.repaired}" at the end; repaired.`);
+            }
+            return resolve(fixed.text);
+          }
+          return resolve(text);
+        }
 
         const detail = (stderr.trim() || text || "(no output)").slice(0, 1000);
         const isUsageLimit = /usage limit|limit reached|rate.?limit|429/i.test(`${stderr}\n${stdout}`);
@@ -841,6 +899,18 @@ Output strictly valid JSON only.`;
   try {
     const raw = await callLLM({ prompt, temperature: 0.2, jsonMode: true });
     const parsed = extractJsonFromText(raw);
+
+    // Shape validation: a missing/garbled score must be a failure, never a silent 0.
+    const isScore = (v: unknown) => typeof v === "number" && Number.isFinite(v) && v >= 0 && v <= 100;
+    if (!parsed || typeof parsed !== "object" || !isScore(parsed.resume_score)) {
+      throw new Error(`Invalid score shape: resume_score=${JSON.stringify(parsed?.resume_score)}`);
+    }
+    if (!parsed.score_breakdown || typeof parsed.score_breakdown !== "object" || Array.isArray(parsed.score_breakdown)) {
+      throw new Error("Invalid score shape: score_breakdown is not an object");
+    }
+    if (isDreamMode && !isScore(parsed.dream_score)) {
+      throw new Error(`Invalid score shape: dream_score=${JSON.stringify(parsed.dream_score)}`);
+    }
 
     const resumeScore = Math.max(0, Math.min(100, Math.round(Number(parsed.resume_score) || 0)));
     let dreamScore: number | null = null;
