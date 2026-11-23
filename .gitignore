@@ -27,3 +27,6 @@ yarn-error.log*
 
 # Local AI run logs (rodar-ia.bat)
 logs/
+
+# Projetos ainda fora do currículo (rascunho local)
+web/scripts/_projetos-futuros.json
