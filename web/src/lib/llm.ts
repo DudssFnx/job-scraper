@@ -951,7 +951,14 @@ PRINCIPLES OF HIGH-IMPACT RESUME WRITING:
    - CONCISE & SCANNABLE: Keep each bullet to 1-2 lines maximum. Preserve all original 'job_title', 'company', 'location', 'start_date', and 'end_date' fields unchanged.
 
 4. PROJECTS (2-3 Bullets per Project, separated by "\\n"):
-   - Frame each selected project around what was built, how the technologies were applied, and the practical problem solved. Keep 'name' and 'technologies' unchanged.`;
+   - Frame each selected project around what was built, how the technologies were applied, and the practical problem solved. Keep 'name' and 'technologies' unchanged.
+
+5. OUTPUT LANGUAGE (MANDATORY):
+   - Detect the language of the Target Job Description. Write "summary", every bullet, every "description" and every soft-skill entry in "skills" in THAT language.
+   - If the job description is in Portuguese, write natural Brazilian Portuguese (pt-BR) with Brazilian resume conventions (e.g., verbs in the past tense/infinitive like "Desenvolvi", "Implementei", "Integrei"), never European Portuguese and never a literal translation from English.
+   - If the job description is in English, write in English.
+   - If the job description mixes languages (e.g., English requirements with a Portuguese benefits section), use the language of the responsibilities/requirements section.
+   - Keep technology, framework, tool, and product names exactly as written (e.g., "React.js", "Node.js", "PostgreSQL", "Supabase", "API REST"). Keep 'job_title', 'company', 'location', and dates exactly as in the original.`;
 
   const prompt = `Target Role Context:
 - Target Title: ${jobDetails.job_title}
@@ -1392,6 +1399,12 @@ FORMATTING REQUIREMENTS:
 Sincerely,
 ${candidateName}
 
+LANGUAGE RULE (OVERRIDES THE FORMAT ABOVE WHEN APPLICABLE):
+- Detect the language of the job description. If it is in Portuguese, write the ENTIRE letter in natural Brazilian Portuguese (pt-BR), using the salutation "Prezado(a) time de recrutamento da ${jobDetails.company}," and the sign-off "Atenciosamente," followed by ${candidateName}.
+- If it is in English, keep the English format above.
+- If the job description mixes languages (e.g., English requirements with a Portuguese benefits section), use the language of the responsibilities/requirements section.
+- Keep technology and product names exactly as written.
+
 Output ONLY the final cover letter text. No preamble, no postscript, no commentary.`;
 
   const userPrompt = `TARGET ROLE & COMPANY:
@@ -1430,6 +1443,23 @@ Write the complete, tailored cover letter now.`;
  * On-Demand Recruiter Outreach & Networking Generator.
  * Creates a LinkedIn connection note (<300 chars), a cold InMail pitch, and an alumni referral request.
  */
+/**
+ * Heuristic language check for job descriptions: true when the text carries
+ * at least 3 markers that are exclusive to Portuguese (not shared with Spanish).
+ * Suffix markers (ção/ções/ões) match anywhere; word markers match whole words only.
+ * Single-pass alternation so "ções" is never double-counted as "ões".
+ * Used only for deterministic fallback text; prompts let the LLM detect the language.
+ */
+const PT_MARKER_REGEX =
+  /ções|ção|ões|(?<!\p{L})(?:você|não|experiência|conhecimento|desejável|benefícios|vaga|atuação)(?!\p{L})/gu;
+
+export function isPortugueseText(text: string): boolean {
+  if (!text) return false;
+  const normalized = text.normalize("NFC").toLowerCase();
+  const matches = normalized.match(PT_MARKER_REGEX);
+  return (matches?.length ?? 0) >= 3;
+}
+
 export async function generateOutreachNotesWithLLM(
   baseResume: Resume,
   jobDetails: {
@@ -1445,7 +1475,11 @@ export async function generateOutreachNotesWithLLM(
   } = {}
 ): Promise<OutreachVariants> {
   const candidateName = baseResume.name || "Candidate";
-  const recipient = options.recipientName?.trim() || "Hiring Team";
+  // isPt drives only the hardcoded fallback messages below, never the prompt.
+  const isPt = isPortugueseText(jobDetails.description || "");
+  const recipient =
+    options.recipientName?.trim() || (isPt ? "time de recrutamento" : "Hiring Team");
+  const promptRecipient = options.recipientName?.trim() || "Hiring Team";
   const tone = options.tone || "direct_impactful";
 
   const topSkills = (baseResume.skills || []).slice(0, 10).join(", ");
@@ -1457,7 +1491,7 @@ export async function generateOutreachNotesWithLLM(
   const prompt = `You are an elite career networking strategist and recruiter outreach expert.
 Generate 3 distinct, high-conversion outreach messages for the candidate reaching out regarding the ${jobDetails.job_title} position at ${jobDetails.company}.
 
-Target Recipient: ${recipient}
+Target Recipient: ${promptRecipient}
 Target Company: ${jobDetails.company}
 Target Role: ${jobDetails.job_title}
 Candidate Name: ${candidateName}
@@ -1465,6 +1499,15 @@ Candidate Core Skills: ${topSkills}
 Key Projects: ${topProjects}
 Tone: ${tone}
 ${options.customNote ? `Special Context to Include: "${options.customNote}"` : ""}
+
+--- JOB DESCRIPTION (excerpt) ---
+${(jobDetails.description || "").slice(0, 3000)}
+--- END JOB DESCRIPTION ---
+
+LANGUAGE RULE:
+- Detect the language of the job description. If it is in Portuguese, write ALL three messages in natural Brazilian Portuguese (pt-BR) (e.g. "Olá, {nome}"; if the recipient is "Hiring Team", address the "time de recrutamento"), never European Portuguese and never a literal translation from English. If it is in English, write in English.
+- If the job description mixes languages (e.g., English requirements with a Portuguese benefits section), use the language of the responsibilities/requirements section.
+Keep technology names exactly as written. Only mention skills and projects listed above — never invent experience.
 
 CRITICAL RULES:
 1. "linkedin_connection_note" MUST BE STRICTLY UNDER 300 CHARACTERS including spaces. Concise, respectful, hooks the recipient immediately.
@@ -1486,7 +1529,9 @@ Output strictly valid JSON only.`;
 
     let connectionNote = typeof parsed.linkedin_connection_note === "string"
       ? parsed.linkedin_connection_note.trim()
-      : `Hi ${recipient}, saw your team at ${jobDetails.company} is hiring for ${jobDetails.job_title}. With my background in ${topSkills.slice(0, 40)}, I'd love to connect!`;
+      : isPt
+        ? `Olá, ${recipient}! Vi que a ${jobDetails.company} está contratando para ${jobDetails.job_title}. Com minha experiência em ${topSkills.slice(0, 40)}, gostaria de me conectar!`
+        : `Hi ${recipient}, saw your team at ${jobDetails.company} is hiring for ${jobDetails.job_title}. With my background in ${topSkills.slice(0, 40)}, I'd love to connect!`;
 
     // Strict 300-char safety clamp
     if (connectionNote.length > 295) {
@@ -1500,6 +1545,13 @@ Output strictly valid JSON only.`;
     };
   } catch (err) {
     console.error("Error generating outreach notes:", err);
+    if (isPt) {
+      return {
+        linkedin_connection_note: `Olá, ${recipient}! Vi que a ${jobDetails.company} está buscando ${jobDetails.job_title}. Minha experiência tem bastante aderência à stack de vocês. Vamos nos conectar?`,
+        cold_inmail: `Olá, ${recipient},\n\nVi a vaga de ${jobDetails.job_title} na ${jobDetails.company}. Pela minha experiência com ${topSkills}, quis entrar em contato diretamente para demonstrar meu interesse.\n\nAtenciosamente,\n${candidateName}`,
+        referral_request: `Olá, ${recipient},\n\nTudo bem? Vi uma vaga de ${jobDetails.job_title} aberta na ${jobDetails.company} e gostaria muito de saber um pouco sobre sua experiência no time.\n\nAtenciosamente,\n${candidateName}`,
+      };
+    }
     return {
       linkedin_connection_note: `Hi ${recipient}, noticed ${jobDetails.company} is seeking a ${jobDetails.job_title}. My expertise aligns closely with your tech stack—would love to connect!`,
       cold_inmail: `Hi ${recipient},\n\nI noticed the ${jobDetails.job_title} role at ${jobDetails.company}. Given my background in ${topSkills}, I wanted to reach out directly to express my interest.\n\nBest,\n${candidateName}`,
@@ -1583,6 +1635,11 @@ Skills: ${(baseResume.skills || []).slice(0, 15).join(", ")}
 
 ${toneGuidance}
 ${options.customNotes ? `Candidate Focus / Special Context: "${options.customNotes}"` : ""}
+
+LANGUAGE RULE:
+- Detect the language of the job description. If it is in Portuguese, write EVERY string value in the JSON (company_brief, questions, topics, answer guides, STAR fields, reverse questions) in natural Brazilian Portuguese (pt-BR), never European Portuguese. If it is in English, write in English.
+- If the job description mixes languages (e.g., English requirements with a Portuguese benefits section), use the language of the responsibilities/requirements section.
+Keep the JSON keys exactly as specified below (in English). Keep technology names exactly as written. STAR answers must use only the candidate's real background above — never invent experience or metrics.
 
 Generate:
 1. 5 Technical Questions likely to be asked for this exact role and stack, each with a bulleted "answer_guide" of what top answers must include.
