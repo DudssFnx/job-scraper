@@ -150,6 +150,16 @@ export const PRESET_GEO_LOCATIONS: GeoLocationItem[] = [
 ];
 
 /**
+ * True when `term` appears in `text` as a whole word/phrase (Unicode-aware boundaries),
+ * e.g. "us" matches "austin, us" but not "são paulo" or "austin".
+ */
+export function containsWholeTerm(text: string, term: string): boolean {
+  if (!term) return false;
+  const escaped = term.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  return new RegExp(`(^|[^\\p{L}\\p{N}])${escaped}($|[^\\p{L}\\p{N}])`, "u").test(text);
+}
+
+/**
  * Resolves a given location string and optional existing Geo ID against known presets and aliases.
  *
  * Critical Safety Rules:
@@ -168,6 +178,8 @@ export function resolveGeoLocation(
 
   const trimmed = locationName.trim();
   const lower = trimmed.toLowerCase();
+  const isSingapore = lower.includes("singapore") || lower === "sg";
+  const strGeoId = existingGeoId !== undefined && existingGeoId !== null ? String(existingGeoId).trim() : "";
 
   // 1. Exact match on preset name or country
   const directMatch = PRESET_GEO_LOCATIONS.find(
@@ -177,31 +189,47 @@ export function resolveGeoLocation(
     return { name: directMatch.name, geoId: directMatch.geo_id, isPreset: true };
   }
 
-  // 2. Alias match (e.g. "Dubai / UAE", "UAE", "Dubai", "UK", "US")
+  // 1b. Honor an explicit (non-stale) Geo ID before any fuzzy matching.
+  // Without this, custom locations such as "São Paulo, Brazil" (contains "au") or
+  // "Austin, TX" were silently rewritten to a preset (Australia) by the alias step.
+  const hasExplicitGeoId = strGeoId !== "" && !(strGeoId === "102454443" && !isSingapore);
+  if (hasExplicitGeoId) {
+    const presetById = PRESET_GEO_LOCATIONS.find((p) => p.geo_id === strGeoId);
+    if (presetById) {
+      return { name: presetById.name, geoId: presetById.geo_id, isPreset: true };
+    }
+    return { name: trimmed, geoId: strGeoId, isPreset: false };
+  }
+
+  // 2. Alias match (e.g. "Dubai / UAE", "UAE", "Dubai", "UK", "US").
+  // Aliases must match whole words, so short aliases ("au", "in", "us", "ca") never match inside other words.
   const aliasMatch = PRESET_GEO_LOCATIONS.find(
     (p) =>
       p.aliases &&
       p.aliases.some((a) => {
         const aLow = a.toLowerCase();
-        return aLow === lower || lower === aLow.replace(/\s*\/\s*/g, " ") || lower.includes(aLow) || aLow.includes(lower);
+        return (
+          aLow === lower ||
+          lower === aLow.replace(/\s*\/\s*/g, " ") ||
+          containsWholeTerm(lower, aLow) ||
+          (lower.length >= 4 && aLow.includes(lower))
+        );
       })
   );
   if (aliasMatch) {
     return { name: aliasMatch.name, geoId: aliasMatch.geo_id, isPreset: true };
   }
 
-  // 3. Substring match against preset name or country
-  const subMatch = PRESET_GEO_LOCATIONS.find(
-    (p) => lower.includes(p.name.toLowerCase()) || p.name.toLowerCase().includes(lower)
-  );
+  // 3. Substring match against preset name or country (whole words only)
+  const subMatch = PRESET_GEO_LOCATIONS.find((p) => {
+    const pName = p.name.toLowerCase();
+    return containsWholeTerm(lower, pName) || (lower.length >= 4 && pName.includes(lower));
+  });
   if (subMatch) {
     return { name: subMatch.name, geoId: subMatch.geo_id, isPreset: true };
   }
 
   // 4. Custom Location Handling
-  const isSingapore = lower.includes("singapore") || lower === "sg";
-  const strGeoId = existingGeoId !== undefined && existingGeoId !== null ? String(existingGeoId).trim() : "";
-
   // Guard against stale Singapore Geo ID when location is non-Singapore
   if (!isSingapore && strGeoId === "102454443") {
     return { name: trimmed, geoId: "", isPreset: false };

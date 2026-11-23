@@ -12,7 +12,7 @@ import {
   Loader2,
   ExternalLink,
 } from "lucide-react";
-import { GeoLocationItem, resolveGeoLocation } from "@/lib/setup/geoLocations";
+import { GeoLocationItem, resolveGeoLocation, containsWholeTerm } from "@/lib/setup/geoLocations";
 
 interface LocationComboboxProps {
   locations: GeoLocationItem[];
@@ -61,7 +61,7 @@ export function LocationCombobox({
       loc.aliases &&
         loc.aliases.some((a) => {
           const aLow = a.toLowerCase();
-          return aLow === query || aLow.includes(query) || query.includes(aLow);
+          return aLow === query || aLow.includes(query) || containsWholeTerm(query, aLow);
         })
     );
     return nameMatch || countryMatch || typeMatch || aliasMatch;
