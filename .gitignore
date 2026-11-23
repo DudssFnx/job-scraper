@@ -24,3 +24,6 @@ yarn-debug.log*
 yarn-error.log*
 .DS_Store
 *.pem
+
+# Local AI run logs (rodar-ia.bat)
+logs/

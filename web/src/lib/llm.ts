@@ -67,6 +67,159 @@ export async function callLLM(
   );
 }
 
+/**
+ * Runs a single text-only generation through the local Claude Code CLI (`claude -p`),
+ * billed to the user's Claude subscription instead of a paid API key.
+ * - Prompt goes through STDIN (avoids Windows command-line length limits).
+ * - No tools, no MCP servers, no session persistence; cwd is an empty temp dir
+ *   so no project CLAUDE.md/AGENTS.md is loaded.
+ * - API-key env vars are stripped so the CLI falls back to the subscription login.
+ */
+const CLAUDE_CLI_TIMEOUT_MS = 180_000;
+
+async function resolveClaudeCliPath(): Promise<string> {
+  const override = process.env.CLAUDE_CLI_PATH?.trim();
+  if (override) return override;
+  if (process.platform !== "win32") return "claude";
+
+  const { execFile } = await import("node:child_process");
+  const out = await new Promise<string>((resolve) => {
+    execFile("where", ["claude"], { windowsHide: true }, (err, stdout) => resolve(err ? "" : stdout));
+  });
+  const candidates = out.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
+  const pick =
+    candidates.find((c) => c.toLowerCase().endsWith(".exe")) ||
+    candidates.find((c) => c.toLowerCase().endsWith(".cmd"));
+  if (!pick) {
+    throw new Error(
+      "Claude Code CLI not found (`where claude` returned no .exe/.cmd). Install it or set CLAUDE_CLI_PATH.",
+    );
+  }
+  return pick;
+}
+
+/** Env vars stripped from the CLI child process. */
+export const CLAUDE_CLI_STRIPPED_ENV = [
+  // Force subscription auth: never let the CLI pick up a paid API key/proxy.
+  "ANTHROPIC_API_KEY",
+  "ANTHROPIC_AUTH_TOKEN",
+  "ANTHROPIC_BASE_URL",
+  // Running from inside a Claude Code session must not look like a nested session.
+  "CLAUDECODE",
+  "CLAUDE_CODE_ENTRYPOINT",
+] as const;
+
+export function buildClaudeCliEnv(base: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+  const stripped = new Set<string>(CLAUDE_CLI_STRIPPED_ENV);
+  const env = {} as NodeJS.ProcessEnv;
+  // Case-insensitive on purpose: Windows env names are case-insensitive, a plain copy is not.
+  for (const [k, v] of Object.entries(base)) {
+    if (!stripped.has(k.toUpperCase())) env[k] = v;
+  }
+  return env;
+}
+
+async function runClaudeCli({
+  prompt,
+  systemPrompt,
+  model,
+  jsonMode,
+}: {
+  prompt: string;
+  systemPrompt?: string;
+  model?: string;
+  jsonMode?: boolean;
+}): Promise<string> {
+  const { spawn } = await import("node:child_process");
+  const os = await import("node:os");
+  const path = await import("node:path");
+  const fs = await import("node:fs");
+
+  // Model alias from app_settings.llm_model ("sonnet" | "opus" | "haiku" or a full model id).
+  // Only the model name is variable on the command line; it must match a strict whitelist.
+  const cliModel = (model || "").trim() || "sonnet";
+  if (!/^[a-z0-9.\-]+$/i.test(cliModel)) {
+    throw new Error(`claude_cli: invalid model name "${cliModel}" (allowed: letters, digits, '.', '-')`);
+  }
+
+  const cwd = path.join(os.tmpdir(), "jobtrack-cli");
+  fs.mkdirSync(cwd, { recursive: true });
+
+  const env = buildClaudeCliEnv(process.env);
+
+  const exe = await resolveClaudeCliPath();
+  const useShell = /\.(cmd|bat)$/i.test(exe);
+  const args = [
+    "-p",
+    "--output-format", "text",
+    "--model", cliModel,
+    "--tools", useShell ? '""' : "",
+    "--strict-mcp-config",
+    "--no-session-persistence",
+    "--disable-slash-commands",
+  ];
+
+  const jsonRule = jsonMode
+    ? "\n\nRespond with ONLY the raw JSON value. No markdown code fences, no commentary before or after."
+    : "";
+  const input =
+    `<instructions>\n${systemPrompt || "You are a helpful assistant."}\n</instructions>\n\n` +
+    `<task>\n${prompt}${jsonRule}\n</task>\n`;
+
+  return new Promise<string>((resolve, reject) => {
+    const spawnOpts = { cwd, env, windowsHide: true, stdio: ["pipe", "pipe", "pipe"] as ["pipe", "pipe", "pipe"] };
+    // .cmd shims need a shell on Windows. All args are fixed literals or regex-validated
+    // (model), so the command line is built here instead of passing args + shell (DEP0190).
+    const child = useShell
+      ? spawn(`"${exe}" ${args.join(" ")}`, { ...spawnOpts, shell: true })
+      : spawn(exe, args, spawnOpts);
+
+    let stdout = "";
+    let stderr = "";
+    let settled = false;
+    const finish = (fn: () => void) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      fn();
+    };
+
+    const timer = setTimeout(() => {
+      if (process.platform === "win32" && child.pid) {
+        // Kill the whole tree (cmd.exe -> node) on Windows.
+        spawn("taskkill", ["/pid", String(child.pid), "/T", "/F"], { windowsHide: true });
+      } else {
+        child.kill("SIGKILL");
+      }
+      finish(() => reject(new Error(`claude_cli: timed out after ${CLAUDE_CLI_TIMEOUT_MS / 1000}s`)));
+    }, CLAUDE_CLI_TIMEOUT_MS);
+
+    child.stdout.setEncoding("utf8");
+    child.stderr.setEncoding("utf8");
+    child.stdout.on("data", (d) => (stdout += d));
+    child.stderr.on("data", (d) => (stderr += d));
+
+    child.on("error", (err) => finish(() => reject(new Error(`claude_cli: failed to start (${err.message})`))));
+
+    child.on("close", (code) => {
+      finish(() => {
+        const text = stdout.trim();
+        if (code === 0 && text) return resolve(text);
+
+        const detail = (stderr.trim() || text || "(no output)").slice(0, 1000);
+        const isUsageLimit = /usage limit|limit reached|rate.?limit|429/i.test(`${stderr}\n${stdout}`);
+        const prefix = isUsageLimit ? "claude_cli rate limit: " : "claude_cli error: ";
+        reject(new Error(`${prefix}exit code ${code}${text ? "" : ", empty output"} — ${detail}`));
+      });
+    });
+
+    child.stdin.on("error", () => {
+      /* surfaced through close/stderr */
+    });
+    child.stdin.end(input, "utf8");
+  });
+}
+
 async function executeCallLLM({
   prompt,
   systemPrompt,
@@ -97,6 +250,11 @@ async function executeCallLLM({
     } catch {
       // Ignore database lookup error if DB not yet reachable
     }
+  }
+
+  // 0. Claude subscription via local Claude Code CLI (no API key needed).
+  if (explicitProvider === "claude_cli") {
+    return runClaudeCli({ prompt, systemPrompt, model, jsonMode });
   }
 
   if (!model) {
