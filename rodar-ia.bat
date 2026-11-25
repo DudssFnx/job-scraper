@@ -3,6 +3,7 @@ setlocal
 title JobTrack - IA local (score + customize)
 
 :: Roda a IA localmente pela assinatura do Claude (provider claude_cli):
+:: 0) scrape de reserva (scrape-fallback.ps1): se a nuvem nao buscou vagas hoje, dispara e espera
 :: 1) npm run score -- --limit 30   2) npm run customize -- --limit 5
 :: Log diario em logs\ia-AAAA-MM-DD.log (append; duas execucoes no mesmo dia vao pro mesmo arquivo).
 :: No fim escreve um resumo desta execucao e, se houver falha, abre um aviso no Windows.
@@ -36,6 +37,13 @@ echo.>> "%LOG%"
 echo ============================================================>> "%LOG%"
 echo [%DATE% %TIME%] Inicio RUN %RUNID%>> "%LOG%"
 
+:: Scrape de reserva: o agendamento do GitHub no fork e pouco confiavel. Se hoje nao houve run
+:: com scrape-linkedin em success, dispara o Daily Job Scraper e espera ate 45 min. Falha nao bloqueia o score.
+echo [%TIME%] Conferindo se a nuvem ja buscou vagas hoje...
+powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0scrape-fallback.ps1" >> "%LOG%" 2>&1
+set "SCRAPE_EXIT=%ERRORLEVEL%"
+if not "%SCRAPE_EXIT%"=="0" echo [%DATE% %TIME%] Scrape de reserva falhou, exit=%SCRAPE_EXIT%. Seguindo so com o score.>> "%LOG%"
+
 echo [%TIME%] npm run score -- --limit 30 ...
 echo [%DATE% %TIME%] npm run score -- --limit 30>> "%LOG%"
 call npm run score -- --limit 30 >> "%LOG%" 2>&1
@@ -58,7 +66,7 @@ del "%SUMFILE%" >nul 2>&1
 if not defined RESUMO set "RESUMO=Resumo indisponivel (falha ao ler o log)"
 
 echo [%DATE% %TIME%] %RESUMO%>> "%LOG%"
-echo [%DATE% %TIME%] Fim RUN %RUNID% (score exit=%SCORE_EXIT% customize exit=%CUSTOM_EXIT%)>> "%LOG%"
+echo [%DATE% %TIME%] Fim RUN %RUNID% (scrape exit=%SCRAPE_EXIT% score exit=%SCORE_EXIT% customize exit=%CUSTOM_EXIT%)>> "%LOG%"
 rmdir /s /q "%LOCKDIR%" 2>nul
 echo %RESUMO%
 echo Log: %LOG%
