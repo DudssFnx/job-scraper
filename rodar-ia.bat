@@ -15,6 +15,23 @@ set "LOG=%~dp0logs\ia-%HOJE%.log"
 set "RUNID=%RANDOM%%RANDOM%"
 set "SUMFILE=%~dp0logs\ia-resumo.tmp"
 
+:: Trava: uma execucao por vez. As tarefas 08h30 e 13h30 podem disparar juntas ao
+:: recuperar execucao perdida. mkdir e atomico no Windows: quem cria a pasta roda.
+:: Trava com mais de 2h e considerada velha (execucao morta) e e substituida.
+set "LOCKDIR=%~dp0logs\rodar-ia.lock"
+mkdir "%LOCKDIR%" 2>nul && goto :lock_ok
+powershell -NoProfile -Command "try { if (((Get-Date) - (Get-Item -LiteralPath $env:LOCKDIR).LastWriteTime).TotalHours -gt 2) { exit 0 } else { exit 1 } } catch { exit 1 }"
+if errorlevel 1 goto :ja_rodando
+call :logline "Trava velha, mais de 2h, removida: %LOCKDIR%"
+rmdir /s /q "%LOCKDIR%" 2>nul
+mkdir "%LOCKDIR%" 2>nul && goto :lock_ok
+:ja_rodando
+call :logline "RUN %RUNID% nao iniciado: ja em execucao - outra execucao do rodar-ia esta rodando, trava %LOCKDIR%"
+echo Ja em execucao: outra execucao do rodar-ia esta rodando. Saindo.
+exit /b 0
+:lock_ok
+> "%LOCKDIR%\dono.txt" echo RUN %RUNID% inicio %DATE% %TIME%
+
 echo.>> "%LOG%"
 echo ============================================================>> "%LOG%"
 echo [%DATE% %TIME%] Inicio RUN %RUNID%>> "%LOG%"
@@ -42,6 +59,7 @@ if not defined RESUMO set "RESUMO=Resumo indisponivel (falha ao ler o log)"
 
 echo [%DATE% %TIME%] %RESUMO%>> "%LOG%"
 echo [%DATE% %TIME%] Fim RUN %RUNID% (score exit=%SCORE_EXIT% customize exit=%CUSTOM_EXIT%)>> "%LOG%"
+rmdir /s /q "%LOCKDIR%" 2>nul
 echo %RESUMO%
 echo Log: %LOG%
 
@@ -55,3 +73,12 @@ if "%ALERTA%"=="1" start "" powershell -NoProfile -WindowStyle Hidden -Command "
 
 if "%ALERTA%"=="1" exit /b 1
 exit /b 0
+
+:: Escreve uma linha no log; tenta ate 5 vezes se o arquivo estiver ocupado por outra execucao.
+:: A mensagem nao pode ter parenteses: eles fecham o bloco do for.
+:logline
+for /l %%n in (1,1,5) do (
+  (echo [%DATE% %TIME%] %~1)>> "%LOG%" 2>nul && exit /b 0
+  timeout /t 1 /nobreak >nul
+)
+exit /b 1
