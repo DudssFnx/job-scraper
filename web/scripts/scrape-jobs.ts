@@ -20,6 +20,7 @@ import {
   SAFE_MAX_SCRAPE_PER_SOURCE,
 } from "../src/lib/scraper";
 import { withTelemetry } from "../src/lib/telemetry";
+import { parseSearchFronts, runLinkedInFronts } from "../src/lib/scraper/fronts";
 
 function sleep(ms: number) {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -123,8 +124,37 @@ async function runScraper(ctx?: any) {
 
   let totalNewJobsSaved = 0;
 
+  // 0. Multi-front LinkedIn search (app_settings.search_locations). When no front is enabled,
+  //    or a single --query is given, the original single-location search below runs instead.
+  let linkedinHandledByFronts = false;
+  if (activeSources.includes("linkedin") && !cli.query) {
+    const fronts = parseSearchFronts(settings.searchLocations);
+    if (fronts.some((f) => f.enabled)) {
+      linkedinHandledByFronts = true;
+      console.log("\n============== Starting LinkedIn Scraping (frentes) ==============");
+      const { data: tzRow } = await supabase
+        .from("app_settings")
+        .select("schedule_timezone")
+        .order("updated_at", { ascending: false })
+        .limit(1)
+        .maybeSingle();
+      totalNewJobsSaved += await runLinkedInFronts(fronts, {
+        supabase,
+        baseConfig: settings.linkedinConfig,
+        timeZone: (tzRow as { schedule_timezone?: string } | null)?.schedule_timezone || "America/Sao_Paulo",
+        dailyCap: Math.min(SAFE_MAX_SCRAPE_PER_SOURCE, settings.maxJobsPerSearch.daily_scrape_linkedin ?? SAFE_MAX_SCRAPE_PER_SOURCE),
+        force: Boolean(cli.force),
+        dryRun: Boolean(cli.dryRun),
+        processLinkedInQuery,
+        saveJobsToSupabase,
+        sleep,
+        randomBetween,
+      });
+    }
+  }
+
   // 1. LinkedIn Scraping
-  if (activeSources.includes("linkedin")) {
+  if (activeSources.includes("linkedin") && !linkedinHandledByFronts) {
     console.log("\n==================== Starting LinkedIn Scraping ====================");
     const queries = cli.query ? [cli.query] : settings.linkedinQueries;
     const dailyTarget = Math.min(
