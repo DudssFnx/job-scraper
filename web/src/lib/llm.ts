@@ -11,6 +11,15 @@ import {
   BehavioralStarAnswer,
   CompanyProfile,
 } from "@/types";
+import {
+  computeVerifiedFacts,
+  buildBaseIndex,
+  checkSection,
+  checkLanguage,
+  FORBIDDEN_CLAIMS_PROMPT,
+  type SectionViolation,
+  type BaseIndex,
+} from "@/lib/factcheck";
 
 export interface JobEvaluationResult {
   resume_score: number;
@@ -1041,14 +1050,21 @@ export async function curateResumeStrategy(
     jobDetails.company,
   );
 
+  const facts = computeVerifiedFacts(baseResume);
+
   const systemPrompt = `You are an elite executive resume strategist and ATS optimization specialist.
 Analyze the candidate's Master Resume against the Target Job Description and produce a strategic Curation Plan for a high-converting, 2-page tailored resume.
+
+${facts.block}
+
+${FORBIDDEN_CLAIMS_PROMPT}
 
 HOW TO BUILD THE STRATEGY:
 1. DECODE THE ROLE PAIN POINTS:
    - Identify the 2-3 core operational or technical problems this role exists to solve ('target_role_pain_points').
 2. POSITIONING PITCH ('strategy_summary'):
-   - Write a 1-2 sentence positioning angle in implied first-person resume voice (e.g., "Senior Support Engineer with 5+ years of experience in incident triage and cloud reliability...") that connects the candidate's strongest truth to the role's primary need.
+   - Write a 1-2 sentence positioning angle in implied first-person resume voice (e.g., "Support Engineer focused on incident triage and process automation...") that connects the candidate's strongest truth to the role's primary need.
+   - Any years of experience must come from VERIFIED FACTS; never attach years to a technology.
    - Never mention any hiring company name or use personal pronouns (I, he, she, they).
 3. SKILLS & KEYWORD ALIGNMENT:
    - 'selected_skills': Pick 8 to 15 skills that match the job description AND are demonstrably present in the candidate's Master Resume (across skills, experience, or projects).
@@ -1057,7 +1073,7 @@ HOW TO BUILD THE STRATEGY:
    - 'selected_project_names': Select the 1 to 3 projects from the Master Resume that best prove capability for this specific role. Use the exact project 'name' strings from the Master Resume.
 5. ROLE-BY-ROLE TAILORING BLUEPRINT ('experience_guidance'):
    - Include every job from the candidate's work history.
-   - 'key_achievements_to_highlight': Identify which accomplishments to feature first AND specify exact keywords/terminology from the job description to naturally bridge into those bullets.
+   - 'key_achievements_to_highlight': Identify which accomplishments to feature first AND specify keywords/terminology from the job description that are true SYNONYMS of what those bullets already describe (never keywords that would add scope the Master Resume does not contain).
    - 'points_to_condense_or_omit': Flag routine or unrelated tasks to trim so the most relevant impact stands out.`;
 
   const prompt = `Target Job Details:
@@ -1136,6 +1152,7 @@ export async function writeTailoredResumeContent(
     description: string;
   },
   curationPlan: CurationPlan,
+  factCheckFeedback?: string,
 ): Promise<any> {
   // Filter base projects to only those selected in curationPlan
   const selectedNamesLower = new Set(
@@ -1160,21 +1177,29 @@ export async function writeTailoredResumeContent(
       ? `\nSKILL BOUNDARY: Do not claim or imply experience with: ${curationPlan.missing_skills_acknowledged.join(", ")}. Pivot instead to the candidate's verified adjacent strengths.`
       : "";
 
+  const facts = computeVerifiedFacts(baseResume);
+
   const systemPrompt = `You are an elite executive resume writer. Transform the candidate's Master Resume content into a sharp, ATS-optimized resume tailored to the target role using the provided Curation Plan.
+
+${facts.block}
+
+${FORBIDDEN_CLAIMS_PROMPT}
 
 PRINCIPLES OF HIGH-IMPACT RESUME WRITING:
 1. AUTHENTICITY & GROUNDING:
    - Every claim, metric, and tool must come from the candidate's actual history. Never invent metrics, tools, or responsibilities.${skillGapGuardrail}
+   - Every number you write must already exist in the Master Resume or in VERIFIED FACTS.
+   - Respect each role's and project's 'context_notes' (internal, never printed): they state what may NOT be claimed.
    - Write in crisp, implied first-person resume voice (no personal pronouns like I/my/he/she/they, no candidate names, and never mention any hiring company name).
 
 2. EXECUTIVE SUMMARY (2-3 Sentences):
-   - Sentence 1 (Identity & Scope): Professional title/identity, years of experience, and core specializations aligned with the target role.
+   - Sentence 1 (Identity & Scope): Professional title/identity and core specializations aligned with the target role. Years of experience are optional and, if used, must be exactly as in VERIFIED FACTS.
    - Sentence 2 (Proven Track Record): Highlight 2-3 signature strengths or technical/operational capabilities from their history that directly address the target role's pain points.
-   - Example tone: "Systems & Support Engineer with 5+ years of experience in enterprise incident triage, root cause analysis, and 24/7 high-availability operations. Proven track record reducing ticket resolution times through Python automation, structured escalation workflows, and cross-functional technical documentation."
+   - Example tone (structure only — do not copy its content): "Support Engineer focused on incident triage, root cause analysis and process automation. Track record reducing ticket resolution time through Python scripts, structured escalation workflows and technical documentation."
 
 3. EXPERIENCE BULLETS (3-4 Bullets per Role, separated by "\\n"):
    - FRONT-LOAD RELEVANCE: Order the bullets within each role so the achievement most relevant to the target job is Bullet #1.
-   - BRIDGE TERMINOLOGY: Naturally mirror the job description's keywords where they accurately describe the candidate's past work (follow the Curation Plan's 'key_achievements_to_highlight').
+   - BRIDGE TERMINOLOGY: A job-description keyword may replace a word in a bullet ONLY when it is a true synonym of what that bullet already describes (follow the Curation Plan's 'key_achievements_to_highlight'). Never use a keyword to add scope, technology, team context or responsibility.
    - ACTION + CONTEXT + IMPACT: Start every bullet with a strong action verb (e.g., "- Engineered...", "- Resolved...", "- Automated..."). Include exact metrics when present in the original text; when numbers aren't present, emphasize concrete technical scope, system reliability, or operational outcome rather than forcing unnatural phrasing.
    - CONCISE & SCANNABLE: Keep each bullet to 1-2 lines maximum. Preserve all original 'job_title', 'company', 'location', 'start_date', and 'end_date' fields unchanged.
 
@@ -1215,7 +1240,12 @@ Selected Projects to Tailor (Keep name & technologies identical; rewrite descrip
 ${JSON.stringify(filteredProjects, null, 2)}
 
 ---
+${factCheckFeedback ? `
+FACT-CHECK FEEDBACK ON YOUR PREVIOUS DRAFT (mandatory): the items below were rejected because the Master Resume does not support them. Remove or rewrite each one down to what the Master Resume states; do not replace them with other unsupported claims.
+${factCheckFeedback}
 
+---
+` : ""}
 Return valid JSON matching this exact structure:
 {
   "summary": string,
@@ -1478,6 +1508,308 @@ export function validateAndHealResume(
 }
 
 /**
+ * Stage 3: Fact-Checker.
+ * Per attempt: a) LLM pass that may only REMOVE or REWRITE DOWN unsupported claims (never add);
+ * b) deterministic per-bullet checks (numbers, years, technologies, forbidden claims, course status).
+ * The orchestrator retries Stage 2 once with the rejected items as feedback; anything still
+ * rejected falls back PER BULLET to the base text (literally translated for English jobs).
+ */
+type TailoredResume = ReturnType<typeof validateAndHealResume>;
+type FactIssue = { field: string; trecho: string; motivo: string };
+
+export const MAX_BULLETS_PER_ROLE = 5;
+
+const cleanBullets = (arr: unknown): string[] =>
+  Array.isArray(arr)
+    ? arr.filter((b): b is string => typeof b === "string" && !!b.trim()).map((b) => b.trim().replace(/^[\s•*–—◦▪‣⁃+\-]+/g, "").trim()).filter(Boolean)
+    : [];
+
+const baseBulletsOf = (x: { bullets?: string[]; description?: string | null } | undefined): string[] =>
+  x ? (x.bullets?.length ? cleanBullets(x.bullets) : cleanBullets((x.description || "").split("\n"))) : [];
+
+const logViolations = (section: string, v: SectionViolation[]) =>
+  v.forEach((x) => console.warn(`  [fact-check] violation section=${section} rule=${x.rule} trecho="${x.trecho}" motivo=${x.motivo}`));
+
+/** Keeps Stage 2's ordering (which follows the Stage 1 plan) and caps bullets per role/project. */
+function capBullets(resume: TailoredResume): TailoredResume {
+  for (const e of resume.experience) {
+    e.bullets = (e.bullets || []).slice(0, MAX_BULLETS_PER_ROLE);
+    e.description = e.bullets.join("\n");
+  }
+  for (const p of resume.projects as any[]) {
+    p.bullets = (p.bullets || []).slice(0, MAX_BULLETS_PER_ROLE);
+    p.description = p.bullets.join("\n");
+  }
+  return resume;
+}
+
+/** Stage 3a: LLM fact-check pass (remove / rewrite down only). */
+export async function llmFactCheckPass(
+  baseResume: Resume,
+  tailored: TailoredResume,
+  factsBlock: string,
+): Promise<{ resume: TailoredResume; issues: FactIssue[] }> {
+  const out: TailoredResume = JSON.parse(JSON.stringify(tailored));
+  const sourceProfile = {
+    summary: baseResume.summary,
+    skills: baseResume.skills,
+    experience: (baseResume.experience || []).map((e) => ({
+      job_title: e.job_title, company: e.company, start_date: e.start_date, end_date: e.end_date,
+      technologies: e.technologies, bullets: baseBulletsOf(e), context_notes: e.context_notes,
+    })),
+    projects: (baseResume.projects || []).map((p) => ({
+      name: p.name, role: p.role, technologies: p.technologies, bullets: baseBulletsOf(p), context_notes: p.context_notes,
+    })),
+    education: baseResume.education,
+    certifications: baseResume.certifications,
+  };
+  const tailoredView = {
+    summary: out.summary,
+    skills: out.skills,
+    experience: out.experience.map((e) => ({ company: e.company, job_title: e.job_title, bullets: e.bullets })),
+    projects: out.projects.map((p: any) => ({ name: p.name, bullets: p.bullets })),
+  };
+
+  const systemPrompt = `You are a strict resume fact-checker. You compare a TAILORED resume against the candidate's MASTER resume (the only source of truth) and remove anything the master does not support.
+
+${factsBlock}
+
+${FORBIDDEN_CLAIMS_PROMPT}
+
+RULES:
+- Check every sentence of "summary", every skill, and every bullet. A claim is supported only if the MASTER resume (bullets, skills, technologies, context_notes, education) or VERIFIED FACTS states it, or it is a plain synonym of something stated there.
+- Unsupported, inflated or forbidden content must be REMOVED or REWRITTEN DOWN to exactly what the master supports. NEVER add new information, numbers, technologies, bullets or skills.
+- Respect context_notes restrictions (they say what may not be claimed).
+- Keep the language of the tailored text (do not translate). Keep "company", "job_title" and project "name" strings exactly as given. Keep the bullet order.
+- Report each change in "issues" with: field (e.g. "summary", "skills", "experience[CK BRASIL...].bullets[2]", "projects[MedStudy...].bullets[0]"), trecho (the offending excerpt, short), motivo (short reason).
+
+Return ONLY JSON:
+{"issues":[{"field":string,"trecho":string,"motivo":string}],"corrected":{"summary":string,"skills":string[],"experience":[{"company":string,"job_title":string,"bullets":string[]}],"projects":[{"name":string,"bullets":string[]}]}}`;
+
+  const prompt = `MASTER RESUME (source of truth):
+${JSON.stringify(sourceProfile, null, 2)}
+
+---
+
+TAILORED RESUME TO FACT-CHECK:
+${JSON.stringify(tailoredView, null, 2)}`;
+
+  let issues: FactIssue[] = [];
+  try {
+    const raw = await callLLM({ prompt, systemPrompt, temperature: 0, jsonMode: true });
+    const parsed = extractJsonFromText(raw);
+    issues = (Array.isArray(parsed?.issues) ? parsed.issues : []).map((i: any) => ({
+      field: String(i?.field ?? "?"), trecho: String(i?.trecho ?? "").slice(0, 200), motivo: String(i?.motivo ?? "").slice(0, 200),
+    }));
+    for (const i of issues) console.warn(`  [fact-check] issue field=${i.field} trecho="${i.trecho.slice(0, 160)}" motivo=${i.motivo.slice(0, 160)}`);
+    const c = parsed?.corrected || {};
+    if (typeof c.summary === "string" && c.summary.trim().length >= 20) out.summary = c.summary.trim();
+    if (Array.isArray(c.skills)) {
+      const s = c.skills.filter((x: unknown): x is string => typeof x === "string" && !!x.trim());
+      if (s.length) out.skills = s;
+    }
+    if (Array.isArray(c.experience)) {
+      for (const e of out.experience) {
+        const m = c.experience.find((x: any) =>
+          x?.company?.toLowerCase().trim() === e.company?.toLowerCase().trim() &&
+          x?.job_title?.toLowerCase().trim() === e.job_title?.toLowerCase().trim());
+        const b = cleanBullets(m?.bullets);
+        if (b.length) { e.bullets = b; e.description = b.join("\n"); }
+      }
+    }
+    if (Array.isArray(c.projects)) {
+      for (const p of out.projects as any[]) {
+        const m = c.projects.find((x: any) => x?.name?.toLowerCase().trim() === p.name?.toLowerCase().trim());
+        const b = cleanBullets(m?.bullets);
+        if (b.length) { p.bullets = b; p.description = b.join("\n"); }
+      }
+    }
+  } catch (err: any) {
+    console.warn(`  [fact-check] LLM pass failed (${String(err?.message || err).slice(0, 120)}); deterministic checks still apply.`);
+  }
+  return { resume: capBullets(out), issues };
+}
+
+/** Stage 3b: deterministic scan, per section and per bullet. */
+export interface FactScan {
+  summary: SectionViolation[];
+  skills: SectionViolation[];
+  experience: SectionViolation[][][]; // [role][bullet] -> violations
+  projects: SectionViolation[][][];   // [project][bullet] -> violations
+  total: number;
+}
+
+export function scanTailoredResume(resume: TailoredResume, idx: BaseIndex, expectedLang?: "pt" | "en"): FactScan {
+  const check = (text: string) => [...checkSection(text, idx), ...(expectedLang ? checkLanguage(text, expectedLang) : [])];
+  const summary = resume.summary ? check(resume.summary) : [];
+  const skills = checkSection((resume.skills || []).join(" | "), idx, resume.skills || []);
+  const experience = resume.experience.map((e) => (e.bullets || []).map((b) => check(b)));
+  const projects = (resume.projects as any[]).map((p) => (p.bullets || []).map((b: string) => check(b)));
+  const total = summary.length + skills.length +
+    experience.flat().reduce((n, v) => n + v.length, 0) + projects.flat().reduce((n, v) => n + v.length, 0);
+  return { summary, skills, experience, projects, total };
+}
+
+/** Feedback text for the Stage 2 retry. */
+function buildRetryFeedback(resume: TailoredResume, issues: FactIssue[], scan: FactScan, expectedLang: "pt" | "en"): string {
+  // The reasons below may be in Portuguese and quote the (Portuguese) master; without this reminder the
+  // retry tends to switch the whole draft to Portuguese on English jobs.
+  const langLine = expectedLang === "en"
+    ? "- OUTPUT LANGUAGE REMINDER: the target job is in ENGLISH. Write the summary and EVERY bullet in English, even though the master resume and the notes below are in Portuguese."
+    : "- LEMBRETE DE IDIOMA: a vaga está em PORTUGUÊS. Escreva o resumo e TODOS os bullets em português do Brasil (pt-BR).";
+  const lines: string[] = [langLine, ...issues.map((i) => `- [${i.field}] "${i.trecho}" → ${i.motivo}`)];
+  scan.summary.forEach((v) => lines.push(`- [summary] "${v.trecho}" → ${v.motivo}`));
+  scan.skills.forEach((v) => lines.push(`- [skills] "${v.trecho}" → ${v.motivo}`));
+  scan.experience.forEach((role, r) => role.forEach((vs, b) => vs.forEach((v) =>
+    lines.push(`- [experience ${resume.experience[r].company} bullet ${b + 1}: "${(resume.experience[r].bullets?.[b] || "").slice(0, 120)}"] "${v.trecho}" → ${v.motivo}`))));
+  scan.projects.forEach((proj, p) => proj.forEach((vs, b) => vs.forEach((v) =>
+    lines.push(`- [project ${(resume.projects[p] as any).name} bullet ${b + 1}] "${v.trecho}" → ${v.motivo}`))));
+  return lines.join("\n");
+}
+
+/** Literal translation to English for base-text fallbacks (no additions, removals or embellishment). */
+export async function translateLiteralToEnglish(texts: string[]): Promise<(string | null)[]> {
+  if (texts.length === 0) return [];
+  const systemPrompt = `You are a literal translator. Translate each input string from Portuguese to English.
+Rules: translate literally; do not add, remove or embellish anything; keep proper nouns, product, company and technology names and all numbers exactly as written; keep the same sentence structure and voice.
+Return ONLY JSON: {"translations": string[]} with exactly ${texts.length} item(s), in the same order.`;
+  try {
+    const raw = await callLLM({ prompt: JSON.stringify({ inputs: texts }, null, 2), systemPrompt, temperature: 0, jsonMode: true });
+    const parsed = extractJsonFromText(raw);
+    const t = Array.isArray(parsed?.translations) ? parsed.translations : [];
+    if (t.length !== texts.length) throw new Error(`expected ${texts.length} translations, got ${t.length}`);
+    return t.map((x: unknown) => (typeof x === "string" && x.trim() ? x.trim() : null));
+  } catch (err: any) {
+    console.warn(`  [fact-check] translation failed (${String(err?.message || err).slice(0, 120)})`);
+    return texts.map(() => null);
+  }
+}
+
+/** Language-agnostic anchors (proper nouns, product/tech names, numbers) used to map a bullet to its base bullet. */
+function anchorsOf(text: string): Set<string> {
+  const toks = text.normalize("NFC").match(/[\p{Lu}][\p{L}\d.+#↔-]*|\d[\d.,]*/gu) || [];
+  return new Set(toks.map((t) => (/^\d/.test(t) ? t.replace(/[.,]/g, "") : t.toLowerCase().replace(/[.,]+$/, ""))).filter((t) => t.length >= 2));
+}
+
+function bestBaseMatch(bullet: string, baseBullets: string[], used: Set<number>): number {
+  const a = anchorsOf(bullet);
+  let best = -1, bestScore = 0;
+  baseBullets.forEach((bb, i) => {
+    if (used.has(i)) return;
+    let s = 0;
+    for (const t of anchorsOf(bb)) if (a.has(t)) s++;
+    if (s > bestScore) { bestScore = s; best = i; }
+  });
+  return bestScore >= 2 ? best : -1;
+}
+
+/** Stage 3c: per-bullet / per-section fallback to base text, translated literally for English jobs. */
+export async function applyFactFallbacks(
+  baseResume: Resume,
+  resumeIn: TailoredResume,
+  scan: FactScan,
+  idx: BaseIndex,
+  isEnglishJob: boolean,
+): Promise<{ resume: TailoredResume; fallbacks: string[] }> {
+  const resume: TailoredResume = JSON.parse(JSON.stringify(resumeIn));
+  const fallbacks: string[] = [];
+
+  // Collect base texts that need a replacement, translate in one batch if needed.
+  type Slot = { kind: "summary" } | { kind: "bullet"; group: "experience" | "projects"; i: number; b: number; baseIdx: number };
+  const slots: Slot[] = [];
+  const texts: string[] = [];
+
+  if (scan.summary.length) {
+    logViolations("summary", scan.summary);
+    if (baseResume.summary?.trim()) { slots.push({ kind: "summary" }); texts.push(baseResume.summary.trim()); }
+  }
+
+  const planGroup = (group: "experience" | "projects") => {
+    const items = group === "experience" ? resume.experience : (resume.projects as any[]);
+    const baseItems = group === "experience" ? baseResume.experience || [] : baseResume.projects || [];
+    items.forEach((item: any, i: number) => {
+      const per = scan[group][i] || [];
+      const orig = group === "experience"
+        ? baseItems.find((x: any) => x.company === item.company && x.job_title === item.job_title)
+        : baseItems.find((x: any) => x.name === item.name);
+      const baseBullets = baseBulletsOf(orig as any);
+      const used = new Set<number>();
+      per.forEach((vs, b) => {
+        if (!vs.length) return;
+        const label = group === "experience" ? `experience[${item.company}].bullets[${b}]` : `projects[${item.name}].bullets[${b}]`;
+        logViolations(label, vs);
+        const m = bestBaseMatch(item.bullets[b], baseBullets, used);
+        if (m >= 0) { used.add(m); slots.push({ kind: "bullet", group, i, b, baseIdx: m }); texts.push(baseBullets[m]); }
+        else {
+          item.bullets[b] = null; // removed below
+          fallbacks.push(`${label}:removed`);
+          console.warn(`  [fact-check] fallback bullet ${label} -> removed (no matching base bullet)`);
+        }
+      });
+    });
+  };
+  planGroup("experience");
+  planGroup("projects");
+
+  const replacements = isEnglishJob ? await translateLiteralToEnglish(texts) : texts.slice();
+
+  slots.forEach((slot, k) => {
+    let candidate = replacements[k];
+    if (isEnglishJob && candidate) {
+      const v = [...checkSection(candidate, idx), ...checkLanguage(candidate, "en")];
+      if (v.length) { logViolations(`translated:${slot.kind}`, v); candidate = null; }
+      else console.warn(`  [fact-check] translated fallback ${slot.kind === "summary" ? "summary" : `${slot.group}[${slot.i}].bullets[${slot.b}]`}`);
+    }
+    if (slot.kind === "summary") {
+      if (candidate) {
+        resume.summary = candidate;
+        fallbacks.push("summary:base");
+        console.warn(`  [fact-check] fallback summary -> base${isEnglishJob ? " (translated)" : ""}`);
+      } else {
+        resume.summary = "";
+        fallbacks.push("summary:omitted");
+        console.warn(`  [fact-check] summary omitted`);
+      }
+      return;
+    }
+    const item: any = slot.group === "experience" ? resume.experience[slot.i] : (resume.projects as any[])[slot.i];
+    const label = `${slot.group}[${slot.group === "experience" ? item.company : item.name}].bullets[${slot.b}]`;
+    if (candidate) {
+      item.bullets[slot.b] = candidate;
+      fallbacks.push(`${label}:base`);
+      console.warn(`  [fact-check] fallback bullet ${label} -> base bullet ${slot.baseIdx + 1}${isEnglishJob ? " (translated)" : ""}`);
+    } else {
+      item.bullets[slot.b] = null;
+      fallbacks.push(`${label}:removed`);
+      console.warn(`  [fact-check] fallback bullet ${label} -> removed (translation rejected)`);
+    }
+  });
+  if (scan.summary.length && !baseResume.summary?.trim()) {
+    resume.summary = "";
+    fallbacks.push("summary:omitted");
+    console.warn(`  [fact-check] summary omitted`);
+  }
+
+  // Skills: keep only skills present in the base list.
+  if (scan.skills.length) {
+    logViolations("skills", scan.skills);
+    const baseSet = new Set((baseResume.skills || []).map((s) => s.normalize("NFC").toLowerCase().trim()));
+    const kept = (resume.skills || []).filter((s) => baseSet.has(s.normalize("NFC").toLowerCase().trim()));
+    resume.skills = kept.length ? kept : (baseResume.skills || []).slice(0, 15);
+    fallbacks.push("skills:filtered");
+    console.warn(`  [fact-check] fallback skills -> only skills present in base (${resume.skills.length})`);
+  }
+
+  // Drop removed bullets, cap, re-sync descriptions.
+  for (const item of [...resume.experience, ...(resume.projects as any[])]) {
+    item.bullets = (item.bullets || []).filter((b: string | null): b is string => !!b).slice(0, MAX_BULLETS_PER_ROLE);
+    item.description = item.bullets.join("\n");
+    if (item.bullets.length === 0) console.warn(`  [fact-check] warning: ${item.company || item.name} left without bullets after fallback`);
+  }
+  return { resume, fallbacks };
+}
+
+/**
  * Multi-Stage Orchestrator for Resume Customization.
  * Coordinates Stage 1 (The Strategist), Stage 2 (The ATS Copywriter), and Stage 2.5 (Deterministic Validation).
  * Callers immediately execute Stage 3 (ATS Rescore via scoreJobWithResume).
@@ -1510,28 +1842,54 @@ export async function customizeResumeWithLLM(
   // Rate-limiting safety pause between Stage 1 and Stage 2 (respects 15-30 RPM limits on free tiers)
   await new Promise((resolve) => setTimeout(resolve, 2000));
 
+  const facts = computeVerifiedFacts(baseResume);
+  const idx = buildBaseIndex(baseResume, facts);
+  const isEnglishJob = !isPortugueseText(jobDetails.description || "");
+  const expectedLang: "pt" | "en" = isEnglishJob ? "en" : "pt";
+
+  // One tailoring attempt: Stage 2 (Copywriter) -> 2.5 (validation + bullet cap) -> 3a (LLM fact-check) -> 3b (deterministic scan)
+  const attempt = async (feedback?: string) => {
+    console.log(
+      `  [ResumeTailor] Stage 2/3: Crafting high-impact tailored ATS copy (The Copywriter)${feedback ? " — retry with fact-check feedback" : ""}...`,
+    );
+    const raw = await writeTailoredResumeContent(baseResume, jobDetails, curationPlan, feedback);
+    console.log(
+      `  [ResumeTailor] Stage 2.5: Running deterministic code verification & timeline preservation...`,
+    );
+    const validated = validateAndHealResume(baseResume, raw, curationPlan);
+    console.log(
+      `  [ResumeTailor] Stage 3: Fact-checking tailored content against the master resume (The Fact-Checker)...`,
+    );
+    const { resume, issues } = await llmFactCheckPass(baseResume, validated, facts.block);
+    const scan = scanTailoredResume(resume, idx, expectedLang);
+    return { resume, issues, scan };
+  };
+
+  let result = await attempt();
+  if (result.issues.length > 0 || result.scan.total > 0) {
+    const feedback = buildRetryFeedback(result.resume, result.issues, result.scan, expectedLang);
+    console.warn(
+      `  [fact-check] retry: ${result.issues.length} LLM issue(s), ${result.scan.total} deterministic violation(s) -> re-running Stage 2 once with feedback`,
+    );
+    result = await attempt(feedback);
+  }
+
+  let finalResume = result.resume;
+  let fallbacks: string[] = [];
+  if (result.scan.total > 0) {
+    ({ resume: finalResume, fallbacks } = await applyFactFallbacks(baseResume, result.resume, result.scan, idx, isEnglishJob));
+  }
+  // Final guard: the output must pass the deterministic scan.
+  const residual = scanTailoredResume(finalResume, idx, expectedLang).total;
   console.log(
-    `  [ResumeTailor] Stage 2/3: Crafting high-impact tailored ATS copy (The Copywriter)...`,
-  );
-  const rawTailoredContent = await writeTailoredResumeContent(
-    baseResume,
-    jobDetails,
-    curationPlan,
+    `  [fact-check] done: ${result.issues.length} LLM issue(s) on final attempt, ${fallbacks.length} fallback(s)${fallbacks.length ? ": " + fallbacks.join(", ") : ""}, residual violations: ${residual}.`,
   );
 
   console.log(
-    `  [ResumeTailor] Stage 2.5: Running deterministic code verification & timeline preservation...`,
-  );
-  const validatedResume = validateAndHealResume(
-    baseResume,
-    rawTailoredContent,
-    curationPlan,
-  );
-  console.log(
-    `  [ResumeTailor] ✓ Resume tailored and validated successfully (Ready for ATS Rescoring).`,
+    `  [ResumeTailor] ✓ Resume tailored, validated and fact-checked (Ready for ATS Rescoring).`,
   );
 
-  return validatedResume;
+  return finalResume;
 }
 
 // --- On-Demand Cover Letter Generation ---
@@ -1600,14 +1958,20 @@ export async function generateCoverLetterWithLLM(
     .join("\n");
 
   const topSkills = (baseResume.skills || []).slice(0, 15).join(", ");
+  const facts = computeVerifiedFacts(baseResume);
 
   const systemPrompt = `You are an elite career strategist and executive talent copywriter.
 Write an authentic, highly tailored, ATS-ready cover letter for the candidate applying to ${jobDetails.company} for the role of ${jobDetails.job_title}.
+
+${facts.block}
+
+${FORBIDDEN_CLAIMS_PROMPT}
 
 STRICT ANTI-HALLUCINATION RULES:
 1. ONLY reference real work experience, skills, technologies, and achievements from the candidate's profile.
 2. NEVER invent degrees, previous companies, statistics, or metrics that do not exist in the candidate's background.
 3. If specific metrics are in the candidate profile, leverage them accurately.
+4. Years of experience only as stated in VERIFIED FACTS, never attached to a specific technology; course status only as stated there.
 
 STRICT ANTI-CLICHÉ & VOICE RULES:
 1. BANNED: Never open with "I am writing with great enthusiasm to apply for..." or "I hope this email finds you well".
@@ -1663,6 +2027,12 @@ Write the complete, tailored cover letter now.`;
     systemPrompt,
     temperature: 0.3,
   });
+
+  // Deterministic post-check (log-only: the letter is reviewed/edited by the user in the UI).
+  // Salutation/sign-off contain the company and candidate names, so only the body is checked loosely.
+  const letterViolations = checkSection(response, buildBaseIndex(baseResume, facts))
+    .filter((v) => v.rule !== "numero" || !jobDetails.description.includes(v.trecho));
+  if (letterViolations.length) logViolations("cover_letter", letterViolations);
 
   return response.trim();
 }
