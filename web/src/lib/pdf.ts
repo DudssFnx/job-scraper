@@ -72,6 +72,79 @@ function isNA(value: string | null | undefined): boolean {
   return upper === "" || upper === "NA" || upper === "N/A" || upper === "NONE" || upper === "NULL" || upper === "UNDEFINED";
 }
 
+// --- Safe characters for the built-in PDF fonts ---
+// Helvetica/Times/Courier are the standard PDF fonts and only cover WinAnsi; anything outside it
+// prints as a broken glyph (e.g. "TS↔SQL" came out as `TS!"SQL`). Known symbols get a readable
+// equivalent; any other unsupported character falls back to its accent-stripped form or is dropped.
+const PDF_CHAR_REPLACEMENTS: Record<string, string> = {
+  "↔": "<->", "⇔": "<->", "→": "->", "⇒": "=>", "←": "<-", "⇐": "<=",
+  "≥": ">=", "≤": "<=", "≠": "!=", "≈": "~", "∼": "~", "−": "-", "‐": "-", "‑": "-", "‒": "-",
+  "“": '"', "”": '"', "„": '"', "‟": '"', "‘": "'", "’": "'", "‚": "'", "‛": "'", "′": "'", "″": '"',
+  "✓": "-", "✔": "-", "★": "*", "☆": "*", "▪": "•", "◦": "•", "●": "•", "∙": "•",
+  " ": " ", " ": " ", " ": " ", " ": " ", "​": "", "﻿": "",
+};
+// WinAnsi characters in the 0x80-0x9F range, as Unicode.
+const WIN_ANSI_EXTRA = new Set("€‚ƒ„…†‡ˆ‰Š‹ŒŽ‘’“”•–—˜™š›œžŸ");
+
+export function sanitizePdfText(text: string): string {
+  let out = "";
+  for (const ch of text.normalize("NFC")) {
+    const mapped = PDF_CHAR_REPLACEMENTS[ch];
+    if (mapped !== undefined) {
+      out += mapped;
+      continue;
+    }
+    const code = ch.codePointAt(0)!;
+    if (ch === "\n" || ch === "\t" || (code >= 0x20 && code <= 0x7e) || (code >= 0xa0 && code <= 0xff) || WIN_ANSI_EXTRA.has(ch)) {
+      out += ch;
+      continue;
+    }
+    // Last resort: keep the base letter of accented characters outside Latin-1, drop the rest.
+    out += ch.normalize("NFKD").replace(/[^\x20-\x7e]/g, "");
+  }
+  return out;
+}
+
+function sanitizeDeep<T>(value: T): T {
+  if (typeof value === "string") return sanitizePdfText(value) as unknown as T;
+  if (Array.isArray(value)) return value.map((v) => sanitizeDeep(v)) as unknown as T;
+  if (value && typeof value === "object") {
+    const out: Record<string, unknown> = {};
+    for (const [k, v] of Object.entries(value)) out[k] = sanitizeDeep(v);
+    return out as T;
+  }
+  return value;
+}
+
+// --- Labels follow the language of the resume content ---
+interface PdfLabels {
+  technologies: string;
+  present: string;
+  started: string;
+  graduated: string;
+  portfolio: string;
+}
+const PDF_LABELS: Record<"pt" | "en", PdfLabels> = {
+  pt: { technologies: "Tecnologias", present: "Atual", started: "Início em", graduated: "Concluído em", portfolio: "Portfólio" },
+  en: { technologies: "Technologies", present: "Present", started: "Started", graduated: "Graduated", portfolio: "Portfolio" },
+};
+// Same markers as isPortugueseText in llm.ts (kept local so pdf.ts does not import the LLM module).
+const PT_MARKERS = /ções|ção|ões|(?<!\p{L})(?:você|não|experiência|conhecimento|desejável|benefícios|vaga|atuação|desenvolvi|implementei|integrei)(?!\p{L})/gu;
+
+function detectResumeLanguage(resume: ResumeInput): "pt" | "en" {
+  const parts: string[] = [resume.summary || ""];
+  for (const e of resume.experience || []) parts.push(...(e.bullets || []), e.description || "");
+  for (const p of resume.projects || []) parts.push(...(p.bullets || []), p.description || "");
+  const matches = parts.join("\n").normalize("NFC").toLowerCase().match(PT_MARKERS);
+  return (matches?.length ?? 0) >= 3 ? "pt" : "en";
+}
+
+// Labels for the document being rendered (renderers only receive `doc`).
+const DOC_LABELS = new WeakMap<object, PdfLabels>();
+function labelsFor(doc: object): PdfLabels {
+  return DOC_LABELS.get(doc) || PDF_LABELS.en;
+}
+
 // --- Font family helper ---
 function getFontFamilyNames(font: string) {
   if (font === "Times-Roman") {
@@ -546,7 +619,7 @@ function renderExperience(
     if (!isNA(exp.start_date) && !isNA(exp.end_date)) {
       dates = `${exp.start_date} - ${exp.end_date}`;
     } else if (!isNA(exp.start_date)) {
-      dates = `${exp.start_date} - Present`;
+      dates = `${exp.start_date} - ${labelsFor(doc).present}`;
     }
 
     const rightWidth = 2.0 * 72;
@@ -585,7 +658,7 @@ function renderExperience(
       : 0;
 
     const roleTechH = hasRoleTech
-      ? doc.heightOfString(`Technologies: ${exp.technologies!.join(", ")}`, { width: contentWidth, lineGap }) + 4
+      ? doc.heightOfString(`${labelsFor(doc).technologies}: ${exp.technologies!.join(", ")}`, { width: contentWidth, lineGap }) + 4
       : 0;
 
     const entryHeaderHeight =
@@ -632,7 +705,7 @@ function renderExperience(
           .font(fonts.italic)
           .fontSize(sizes.meta)
           .fillColor(theme.colors.light);
-        doc.text(`Technologies: ${techList.join(", ")}`, margins.left, doc.y, {
+        doc.text(`${labelsFor(doc).technologies}: ${techList.join(", ")}`, margins.left, doc.y, {
           width: contentWidth,
         });
         doc.y += 3;
@@ -690,9 +763,9 @@ function renderEducation(
     if (!isNA(edu.start_year) && !isNA(edu.end_year)) {
       years = `${edu.start_year} - ${edu.end_year}`;
     } else if (!isNA(edu.start_year)) {
-      years = `Started ${edu.start_year}`;
+      years = `${labelsFor(doc).started} ${edu.start_year}`;
     } else if (!isNA(edu.end_year)) {
-      years = `Graduated ${edu.end_year}`;
+      years = `${labelsFor(doc).graduated} ${edu.end_year}`;
     }
 
     const rightWidth = 1.8 * 72;
@@ -800,7 +873,7 @@ function renderProjects(
       : 0;
 
     const techH = hasTech
-      ? doc.heightOfString(`Technologies: ${proj.technologies!.join(", ")}`, { width: contentWidth, lineGap }) + 3
+      ? doc.heightOfString(`${labelsFor(doc).technologies}: ${proj.technologies!.join(", ")}`, { width: contentWidth, lineGap }) + 3
       : 0;
 
     const projHeaderHeight =
@@ -872,7 +945,7 @@ function renderProjects(
           .font(fonts.italic)
           .fontSize(sizes.meta)
           .fillColor(theme.colors.light);
-        doc.text(`Technologies: ${techList.join(", ")}`, margins.left, doc.y, {
+        doc.text(`${labelsFor(doc).technologies}: ${techList.join(", ")}`, margins.left, doc.y, {
           width: contentWidth,
         });
         doc.y += 3;
@@ -1006,9 +1079,12 @@ export interface PdfBufferWithMeta {
 }
 
 export async function buildPdfBufferWithMeta(
-  resumeData: ResumeInput,
+  rawResumeData: ResumeInput,
   styleConfig?: ResumeThemeConfig
 ): Promise<PdfBufferWithMeta> {
+  // Strip characters the built-in fonts cannot draw, and pick labels in the resume's language.
+  const resumeData = sanitizeDeep(rawResumeData);
+  const labels = PDF_LABELS[detectResumeLanguage(resumeData)];
   const theme: ResumeThemeConfig = styleConfig || DEFAULT_THEME_CONFIG;
   const fonts = getFontFamilyNames(theme.typography.fontFamily);
   const sizes = getFontSizes(theme.typography.fontSizeScale);
@@ -1036,6 +1112,8 @@ export async function buildPdfBufferWithMeta(
     });
     doc.on("error", reject);
   });
+
+  DOC_LABELS.set(doc, labels);
 
   const headerStyle =
     theme.layout.headerStyle ||
@@ -1068,7 +1146,7 @@ export async function buildPdfBufferWithMeta(
       const url = resumeData.links.portfolio!.startsWith("http")
         ? resumeData.links.portfolio!
         : `https://${resumeData.links.portfolio}`;
-      linkItems.push({ label: "Portfolio", url });
+      linkItems.push({ label: labels.portfolio, url });
     }
   }
 
