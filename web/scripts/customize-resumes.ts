@@ -14,6 +14,7 @@ import { customizeResumeWithLLM, formatResumeToText, scoreJobWithResume } from "
 import { getActiveResumeStyle } from "../src/lib/supabase/queries";
 import { Resume } from "../src/types";
 import { withTelemetry, TelemetryContext } from "../src/lib/telemetry";
+import { headerLocationForJob } from "../src/lib/market-header";
 
 const MIN_SCORE_THRESHOLD = 60;
 const MIN_DREAM_THRESHOLD = 60;
@@ -124,7 +125,7 @@ async function runResumeCustomizer(ctx?: TelemetryContext) {
   // 3. Query top scored jobs lacking customized resumes
   let query = supabase
     .from("jobs")
-    .select("job_id, job_title, company, description, level, resume_score, dream_score, total_score, status, is_interested")
+    .select("job_id, job_title, company, description, level, location, workplace_type, resume_score, dream_score, total_score, status, is_interested")
     .eq("is_active", true);
 
   if (cli.jobId) {
@@ -197,6 +198,8 @@ async function runResumeCustomizer(ctx?: TelemetryContext) {
         level: job.level,
         description: job.description,
       });
+      // Header location per market (remote abroad / open to relocation); no-op for home-country jobs.
+      customizedData.location = headerLocationForJob(customizedData.location || "", job);
 
       if (!cli.dryRun) {
         // Step B: Insert into customized_resumes table (Single Source of Truth with Theme Snapshot)

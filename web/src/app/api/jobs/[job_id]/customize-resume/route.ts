@@ -12,6 +12,7 @@ import {
   formatResumeToText,
   scoreJobWithResume,
 } from "@/lib/llm";
+import { headerLocationForJob } from "@/lib/market-header";
 
 export async function POST(
   request: Request,
@@ -65,6 +66,8 @@ export async function POST(
       level: job.level,
       description: job.description,
     });
+    // Header location per market (remote abroad / open to relocation); no-op for home-country jobs.
+    customizedData.location = headerLocationForJob(customizedData.location || "", job);
 
     // 4. Fetch active saved resume style for theme snapshotting
     const activeStyle = await getActiveResumeStyle();

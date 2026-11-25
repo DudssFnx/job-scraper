@@ -12,6 +12,17 @@ export interface CandidateConstraints {
   facts: Record<string, string>;
   /** Score caps applied in code after the model answers */
   caps?: { ineligible?: number; stretch?: number };
+  /** Resume header lines per market (see lib/market-header.ts) */
+  header?: MarketHeader;
+}
+
+export interface MarketHeader {
+  /** Regex (case-insensitive) matching job locations in the candidate's home country, e.g. "brasil|brazil" */
+  home_country_pattern: string;
+  remote_en?: string;
+  remote_pt?: string;
+  relocation_en?: string;
+  relocation_pt?: string;
 }
 
 export type EligibilityStatus = "eligible" | "ineligible" | "stretch";
@@ -45,6 +56,7 @@ export function loadCandidateConstraints(): CandidateConstraints | null {
         ? {
             facts: Object.fromEntries(Object.entries(facts).map(([k, v]) => [k, String(v)])),
             caps: { ...DEFAULT_CAPS, ...(raw.caps || {}) },
+            header: raw.header && typeof raw.header.home_country_pattern === "string" ? (raw.header as MarketHeader) : undefined,
           }
         : null;
     cache = { file, mtimeMs, value };
