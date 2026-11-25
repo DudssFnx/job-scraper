@@ -63,6 +63,8 @@ export interface ScoreBreakdown {
   key_strengths?: string[];
   red_flags?: string[];
   actionable_advice?: string;
+  /** Candidate eligibility check (work authorization, region, language); see lib/eligibility.ts */
+  eligibility?: { status: "eligible" | "ineligible" | "stretch"; reason: string };
 }
 
 export interface CompanyProfile {

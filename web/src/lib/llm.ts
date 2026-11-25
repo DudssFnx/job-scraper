@@ -20,6 +20,7 @@ import {
   type SectionViolation,
   type BaseIndex,
 } from "@/lib/factcheck";
+import { withCandidateConstraints, parseEligibility, capScoreForEligibility } from "@/lib/eligibility";
 
 export interface JobEvaluationResult {
   resume_score: number;
@@ -905,6 +906,9 @@ Return a single JSON object with this exact structure:
 Output strictly valid JSON only.`;
   }
 
+  // Candidate eligibility (work authorization, region, language). No-op without the local constraints file.
+  prompt = withCandidateConstraints(prompt);
+
   try {
     const raw = await callLLM({ prompt, temperature: 0.2, jsonMode: true });
     const parsed = extractJsonFromText(raw);
@@ -921,16 +925,17 @@ Output strictly valid JSON only.`;
       throw new Error(`Invalid score shape: dream_score=${JSON.stringify(parsed.dream_score)}`);
     }
 
-    const resumeScore = Math.max(0, Math.min(100, Math.round(Number(parsed.resume_score) || 0)));
+    const eligibility = parseEligibility(parsed.score_breakdown?.eligibility);
+    const resumeScore = capScoreForEligibility(Math.max(0, Math.min(100, Math.round(Number(parsed.resume_score) || 0))), eligibility);
     let dreamScore: number | null = null;
     let totalScore = resumeScore;
 
     if (isDreamMode && parsed.dream_score !== undefined && parsed.dream_score !== null) {
-      dreamScore = Math.max(0, Math.min(100, Math.round(Number(parsed.dream_score) || resumeScore)));
-      totalScore = Math.max(
+      dreamScore = capScoreForEligibility(Math.max(0, Math.min(100, Math.round(Number(parsed.dream_score) || resumeScore))), eligibility);
+      totalScore = capScoreForEligibility(Math.max(
         0,
         Math.min(100, Math.round((resumeScore * 0.5) + (dreamScore * 0.5)))
-      );
+      ), eligibility);
     }
 
     const sb = parsed.score_breakdown || {};
@@ -950,6 +955,14 @@ Output strictly valid JSON only.`;
       red_flags: Array.isArray(sb.red_flags) ? sb.red_flags.map(String) : [],
       actionable_advice: typeof sb.actionable_advice === "string" ? sb.actionable_advice : undefined,
     };
+
+    if (eligibility) {
+      breakdown.eligibility = eligibility;
+      if (eligibility.status !== "eligible") {
+        const label = eligibility.status === "ineligible" ? "Ineligible" : "Stretch";
+        breakdown.red_flags = [`${label}: ${eligibility.reason || "see job requirements"}`, ...(breakdown.red_flags || [])];
+      }
+    }
 
     if (companyIntel) {
       breakdown.company_intel = {
