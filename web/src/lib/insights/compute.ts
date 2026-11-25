@@ -327,7 +327,7 @@ const countMatches = (text: string, re: RegExp) => (text.match(re) || []).length
 export function parseIaLog(text: string): LogCounters {
   return {
     falhas: sumMatches(text, /Failed \/ Skipped: (\d+)/g) + sumMatches(text, /Successfully tailored: \d+ \| Failed: (\d+)/g),
-    repaired: countMatches(text, /JSON response was missing closer/g),
+    repaired: countMatches(text, /\[claude_cli\] JSON response [^\r\n]*repaired\./g),
     retry: countMatches(text, /\[fact-check\] retry:/g),
     fallback: countMatches(text, /\[fact-check\] fallback /g),
     omitted: countMatches(text, /\[fact-check\] summary omitted/g),

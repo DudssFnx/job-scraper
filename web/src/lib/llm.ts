@@ -114,7 +114,7 @@ async function resolveClaudeCliPath(): Promise<string> {
  * is valid JSON once the missing closers are appended (outside any string), return
  * the repaired text. Any other malformation is returned untouched so it still fails.
  */
-export function repairUnclosedJson(text: string): { text: string; repaired: string | null } {
+export function repairUnclosedJson(text: string): { text: string; repaired: string | null; trimmed?: string } {
   let body = text.trim();
   const fenced = body.match(/^```(?:json)?\s*([\s\S]*?)\s*```$/);
   if (fenced) body = fenced[1].trim();
@@ -131,7 +131,8 @@ export function repairUnclosedJson(text: string): { text: string; repaired: stri
   const stack: string[] = [];
   let inString = false;
   let escaped = false;
-  for (const ch of body) {
+  for (let i = 0; i < body.length; i++) {
+    const ch = body[i];
     if (inString) {
       if (escaped) escaped = false;
       else if (ch === "\\") escaped = true;
@@ -143,6 +144,19 @@ export function repairUnclosedJson(text: string): { text: string; repaired: stri
     else if (ch === "[") stack.push("]");
     else if (ch === "}" || ch === "]") {
       if (stack.pop() !== ch) return { text, repaired: null }; // mismatched: don't guess
+      if (stack.length === 0) {
+        // Root value closed. Anything after it (e.g. a stray extra "}" or a trailing note) is
+        // trimmed, but only when the root value alone is valid JSON.
+        const rest = body.slice(i + 1).trim();
+        if (!rest) break;
+        const root = body.slice(0, i + 1);
+        try {
+          JSON.parse(root);
+          return { text: root, repaired: null, trimmed: rest };
+        } catch {
+          return { text, repaired: null };
+        }
+      }
     }
   }
   if (inString || stack.length === 0) return { text, repaired: null };
@@ -268,6 +282,9 @@ async function runClaudeCli({
             const fixed = repairUnclosedJson(text);
             if (fixed.repaired) {
               console.warn(`[claude_cli] JSON response was missing closer(s) "${fixed.repaired}" at the end; repaired.`);
+            }
+            if (fixed.trimmed) {
+              console.warn(`[claude_cli] JSON response had ${fixed.trimmed.length} trailing char(s) after the closing brace (${JSON.stringify(fixed.trimmed.slice(0, 20))}); repaired.`);
             }
             return resolve(fixed.text);
           }

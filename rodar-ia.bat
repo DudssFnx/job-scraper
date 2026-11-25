@@ -58,7 +58,7 @@ set "CUSTOM_EXIT=%ERRORLEVEL%"
 echo [%DATE% %TIME%] customize exit=%CUSTOM_EXIT%>> "%LOG%"
 
 :: Resumo so desta execucao (texto apos o marcador RUN %RUNID%). Exit code do PowerShell = total de falhas.
-powershell -NoProfile -ExecutionPolicy Bypass -Command "$t=[IO.File]::ReadAllText($env:LOG); $i=$t.LastIndexOf('RUN ' + $env:RUNID); if($i -ge 0){$t=$t.Substring($i)}; function S($p){$s=0; foreach($m in [regex]::Matches($t,$p)){$s+=[int]$m.Groups[1].Value}; $s}; $ok=S 'Successfully scored: (\d+)'; $sf=S 'Failed / Skipped: (\d+)'; $ct=S 'Successfully tailored: (\d+)'; $cf=S 'Successfully tailored: \d+ \| Failed: (\d+)'; $rp=[regex]::Matches($t,'JSON response was missing closer').Count; Write-Output ('Resumo: {0} pontuadas, {1} falhas no score, {2} curriculos gerados, {3} falhas no customize, {4} reparos de JSON' -f $ok,$sf,$ct,$cf,$rp); exit ($sf + $cf)" > "%SUMFILE%"
+powershell -NoProfile -ExecutionPolicy Bypass -Command "$t=[IO.File]::ReadAllText($env:LOG); $i=$t.LastIndexOf('RUN ' + $env:RUNID); if($i -ge 0){$t=$t.Substring($i)}; function S($p){$s=0; foreach($m in [regex]::Matches($t,$p)){$s+=[int]$m.Groups[1].Value}; $s}; $ok=S 'Successfully scored: (\d+)'; $sf=S 'Failed / Skipped: (\d+)'; $ct=S 'Successfully tailored: (\d+)'; $cf=S 'Successfully tailored: \d+ \| Failed: (\d+)'; $rp=[regex]::Matches($t,'\[claude_cli\] JSON response .*repaired\.').Count; Write-Output ('Resumo: {0} pontuadas, {1} falhas no score, {2} curriculos gerados, {3} falhas no customize, {4} reparos de JSON' -f $ok,$sf,$ct,$cf,$rp); exit ($sf + $cf)" > "%SUMFILE%"
 set "FALHAS=%ERRORLEVEL%"
 set "RESUMO="
 set /p RESUMO=<"%SUMFILE%"
