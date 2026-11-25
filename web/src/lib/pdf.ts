@@ -122,11 +122,10 @@ interface PdfLabels {
   present: string;
   started: string;
   graduated: string;
-  portfolio: string;
 }
 const PDF_LABELS: Record<"pt" | "en", PdfLabels> = {
-  pt: { technologies: "Tecnologias", present: "Atual", started: "Início em", graduated: "Concluído em", portfolio: "Portfólio" },
-  en: { technologies: "Technologies", present: "Present", started: "Started", graduated: "Graduated", portfolio: "Portfolio" },
+  pt: { technologies: "Tecnologias", present: "Atual", started: "Início em", graduated: "Concluído em" },
+  en: { technologies: "Technologies", present: "Present", started: "Started", graduated: "Graduated" },
 };
 // Same markers as isPortugueseText in llm.ts (kept local so pdf.ts does not import the LLM module).
 const PT_MARKERS = /ções|ção|ões|(?<!\p{L})(?:você|não|experiência|conhecimento|desejável|benefícios|vaga|atuação|desenvolvi|implementei|integrei)(?!\p{L})/gu;
@@ -137,6 +136,11 @@ function detectResumeLanguage(resume: ResumeInput): "pt" | "en" {
   for (const p of resume.projects || []) parts.push(...(p.bullets || []), p.description || "");
   const matches = parts.join("\n").normalize("NFC").toLowerCase().match(PT_MARKERS);
   return (matches?.length ?? 0) >= 3 ? "pt" : "en";
+}
+
+// Links are printed as their visible address (ATS-friendly and readable on paper), still clickable.
+function displayUrl(url: string): string {
+  return url.replace(/^https?:\/\//i, "").replace(/^www\./i, "").replace(/\/+$/, "");
 }
 
 // Labels for the document being rendered (renderers only receive `doc`).
@@ -1134,19 +1138,19 @@ export async function buildPdfBufferWithMeta(
       const url = resumeData.links.linkedin!.startsWith("http")
         ? resumeData.links.linkedin!
         : `https://${resumeData.links.linkedin}`;
-      linkItems.push({ label: "LinkedIn", url });
+      linkItems.push({ label: displayUrl(url), url });
     }
     if (!isNA(resumeData.links.github)) {
       const url = resumeData.links.github!.startsWith("http")
         ? resumeData.links.github!
         : `https://${resumeData.links.github}`;
-      linkItems.push({ label: "GitHub", url });
+      linkItems.push({ label: displayUrl(url), url });
     }
     if (!isNA(resumeData.links.portfolio)) {
       const url = resumeData.links.portfolio!.startsWith("http")
         ? resumeData.links.portfolio!
         : `https://${resumeData.links.portfolio}`;
-      linkItems.push({ label: labels.portfolio, url });
+      linkItems.push({ label: displayUrl(url), url });
     }
   }
 
