@@ -328,3 +328,42 @@ export const FORBIDDEN_CLAIMS_PROMPT = `FORBIDDEN CLAIMS (never write these unle
 - Course status (cursando, graduando, formado, pursuing, graduated...) beyond the exact education text in VERIFIED FACTS.
 - Prototypes must be described as prototypes (never "built/construí <feature>" for screens of a prototype).
 KEYWORD MIRRORING: a job-description term may replace an existing term ONLY as a synonym for something the Master Resume already describes. Never use a job keyword to add scope, technologies, responsibilities or context that the Master Resume does not contain.`;
+
+/**
+ * Fixed fields: job titles, companies, degrees and institutions are never written by the LLM.
+ * Each value in the tailored resume must equal the base value or its fixed English version (*_en).
+ * "Bachelor" is rejected unless the base degree itself says so. Returns the problems found.
+ */
+export function checkFixedTitles(tailored: Partial<Resume>, base: Partial<Resume>): string[] {
+  const problems: string[] = [];
+  const allowed = (...v: (string | null | undefined)[]) => new Set(v.filter((x): x is string => Boolean(x && x.trim())).map((x) => x.trim()));
+  const baseExp = base.experience || [];
+  (tailored.experience || []).forEach((e, i) => {
+    const b = baseExp.find((x) => x.company === e.company && x.job_title === e.job_title) || baseExp[i];
+    if (!b) return problems.push(`experience[${i}]: role not in master resume ("${e.job_title}" @ "${e.company}")`);
+    if (!allowed(b.job_title, b.job_title_en).has((e.job_title || "").trim())) problems.push(`experience[${i}].job_title "${e.job_title}" not in {${b.job_title}, ${b.job_title_en || "-"}}`);
+    if (e.job_title_en && e.job_title_en !== b.job_title_en) problems.push(`experience[${i}].job_title_en "${e.job_title_en}" differs from master`);
+    if (!allowed(b.company, b.company_en).has((e.company || "").trim())) problems.push(`experience[${i}].company "${e.company}" not in master`);
+    if (e.company_en && e.company_en !== b.company_en) problems.push(`experience[${i}].company_en "${e.company_en}" differs from master`);
+  });
+  const baseEdu = base.education || [];
+  (tailored.education || []).forEach((ed, i) => {
+    const b = baseEdu.find((x) => x.institution === ed.institution) || baseEdu[i];
+    if (!b) return problems.push(`education[${i}]: not in master resume ("${ed.degree}")`);
+    if (!allowed(b.degree, b.degree_en).has((ed.degree || "").trim())) problems.push(`education[${i}].degree "${ed.degree}" not in master`);
+    if (ed.degree_en && ed.degree_en !== b.degree_en) problems.push(`education[${i}].degree_en "${ed.degree_en}" differs from master`);
+    if (ed.institution_en && ed.institution_en !== b.institution_en) problems.push(`education[${i}].institution_en differs from master`);
+    const bachelor = /bachelor|bacharel/i;
+    if ([ed.degree, ed.degree_en].some((d) => d && bachelor.test(d)) && ![b.degree, b.degree_en].some((d) => d && bachelor.test(d))) {
+      problems.push(`education[${i}]: "Bachelor" claimed but the master degree is not a bachelor's`);
+    }
+  });
+  // Languages and levels: exactly the master list (PT) or its fixed English list, nothing else.
+  const norm = (list: (string | null | undefined)[] | null | undefined) =>
+    (list || []).filter((x): x is string => Boolean(x && x.trim())).map((x) => x.trim()).sort().join("\n");
+  const tailoredLangs = norm(tailored.languages);
+  if (tailoredLangs && tailoredLangs !== norm(base.languages) && tailoredLangs !== norm(base.languages_en)) {
+    problems.push(`languages ${JSON.stringify(tailored.languages)} differ from the master list (PT or EN)`);
+  }
+  return problems;
+}

@@ -118,15 +118,21 @@ function sanitizeDeep<T>(value: T): T {
 
 // --- Labels follow the language of the resume content ---
 interface PdfLabels {
+  lang: "pt" | "en";
   technologies: string;
   present: string;
   started: string;
   graduated: string;
 }
 const PDF_LABELS: Record<"pt" | "en", PdfLabels> = {
-  pt: { technologies: "Tecnologias", present: "Atual", started: "Início em", graduated: "Concluído em" },
-  en: { technologies: "Technologies", present: "Present", started: "Started", graduated: "Graduated" },
+  pt: { lang: "pt", technologies: "Tecnologias", present: "Atual", started: "Início em", graduated: "Concluído em" },
+  en: { lang: "en", technologies: "Technologies", present: "Present", started: "Started", graduated: "Graduated" },
 };
+
+/** On English resumes, the fixed *_en version of a field (from the base resume) replaces the original. */
+function pickLang(doc: object, original: string | null | undefined, english: string | null | undefined): string | null | undefined {
+  return labelsFor(doc).lang === "en" && !isNA(english) ? english : original;
+}
 // Same markers as isPortugueseText in llm.ts (kept local so pdf.ts does not import the LLM module).
 const PT_MARKERS = /ções|ção|ões|(?<!\p{L})(?:você|não|experiência|conhecimento|desejável|benefícios|vaga|atuação|desenvolvi|implementei|integrei)(?!\p{L})/gu;
 
@@ -636,9 +642,11 @@ function renderExperience(
       : 2;
 
   for (const exp of resumeData.experience) {
-    const jobTitle = isNA(exp.job_title) ? "" : exp.job_title;
+    const titleText = pickLang(doc, exp.job_title, exp.job_title_en);
+    const jobTitle = isNA(titleText) ? "" : titleText!;
+    const companyText = pickLang(doc, exp.company, exp.company_en);
     const companyParts: string[] = [];
-    if (!isNA(exp.company)) companyParts.push(exp.company!);
+    if (!isNA(companyText)) companyParts.push(companyText!);
     if (!isNA(exp.location)) companyParts.push(exp.location!);
     const companyLocation = companyParts.join(" | ");
 
@@ -781,8 +789,10 @@ function renderEducation(
   );
 
   for (const edu of resumeData.education) {
-    let degreeInfo = isNA(edu.degree) ? "" : edu.degree;
-    if (!isNA(edu.field_of_study)) {
+    const useEnglishDegree = pickLang(doc, edu.degree, edu.degree_en) !== edu.degree;
+    let degreeInfo = useEnglishDegree ? edu.degree_en! : isNA(edu.degree) ? "" : edu.degree;
+    // The fixed English degree already names the field of study.
+    if (!useEnglishDegree && !isNA(edu.field_of_study)) {
       degreeInfo += `, ${edu.field_of_study}`;
     }
 
@@ -817,12 +827,13 @@ function renderEducation(
       sizes.body + 2
     );
 
-    if (!isNA(edu.institution)) {
+    const institution = pickLang(doc, edu.institution, edu.institution_en);
+    if (!isNA(institution)) {
       doc
         .font(fonts.regular)
         .fontSize(sizes.body)
         .fillColor(theme.colors.secondary)
-        .text(edu.institution!, margins.left, doc.y, { width: contentWidth });
+        .text(institution!, margins.left, doc.y, { width: contentWidth });
     }
 
     doc.y += 8;

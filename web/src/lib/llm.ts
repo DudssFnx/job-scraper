@@ -17,6 +17,7 @@ import {
   checkSection,
   checkLanguage,
   FORBIDDEN_CLAIMS_PROMPT,
+  checkFixedTitles,
   type SectionViolation,
   type BaseIndex,
 } from "@/lib/factcheck";
@@ -1412,6 +1413,9 @@ export function validateAndHealResume(
     return {
       job_title: origExp.job_title,
       company: origExp.company,
+      // Fixed English titles travel with the role (used by the PDF on English resumes).
+      ...(origExp.job_title_en ? { job_title_en: origExp.job_title_en } : {}),
+      ...(origExp.company_en ? { company_en: origExp.company_en } : {}),
       location: origExp.location,
       start_date: origExp.start_date,
       end_date: origExp.end_date,
@@ -1914,6 +1918,18 @@ export async function customizeResumeWithLLM(
   console.log(
     `  [fact-check] done: ${result.issues.length} LLM issue(s) on final attempt, ${fallbacks.length} fallback(s)${fallbacks.length ? ": " + fallbacks.join(", ") : ""}, residual violations: ${residual}.`,
   );
+
+  // Languages are fixed facts: English jobs get the master's fixed English list, never an LLM rewrite.
+  if (isEnglishJob && baseResume.languages_en?.length) {
+    finalResume = { ...finalResume, languages: [...baseResume.languages_en] };
+  }
+
+  // Fixed fields (titles, companies, degrees, institutions, languages) must match the master or its *_en version.
+  const titleProblems = checkFixedTitles(finalResume, baseResume);
+  if (titleProblems.length > 0) {
+    console.warn(`  [fact-check] fixed titles: ${titleProblems.length} violation(s) -> REJECTED: ${titleProblems.join("; ")}`);
+    throw new Error(`Fact-check rejected: fixed titles differ from the master resume (${titleProblems.join("; ")})`);
+  }
 
   console.log(
     `  [ResumeTailor] ✓ Resume tailored, validated and fact-checked (Ready for ATS Rescoring).`,
