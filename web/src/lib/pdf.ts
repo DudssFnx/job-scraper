@@ -138,6 +138,29 @@ function detectResumeLanguage(resume: ResumeInput): "pt" | "en" {
   return (matches?.length ?? 0) >= 3 ? "pt" : "en";
 }
 
+// Section titles per resume language (custom titles from the style still win when they match it).
+const EN_SECTION_TITLES: Record<string, string> = {
+  summary: "PROFESSIONAL SUMMARY",
+  skills: "SKILLS",
+  experience: "PROFESSIONAL EXPERIENCE",
+  education: "EDUCATION",
+  projects: "PROJECTS",
+  certifications: "CERTIFICATIONS",
+  languages: "LANGUAGES",
+};
+const PT_SECTION_TITLES: Record<string, string> = {
+  summary: "RESUMO PROFISSIONAL",
+  skills: "HABILIDADES",
+  experience: "EXPERIÊNCIA PROFISSIONAL",
+  education: "FORMAÇÃO ACADÊMICA",
+  projects: "PROJETOS",
+  certifications: "CERTIFICAÇÕES",
+  languages: "IDIOMAS",
+};
+function looksPortuguese(title: string): boolean {
+  return /[ãõçáéíóúâêô]/i.test(title) || /\b(resumo|habilidades|compet[eê]ncias|experi[eê]ncia|forma[cç][aã]o|projetos|certifica[cç][oõ]es|idiomas|perfil)\b/i.test(title);
+}
+
 // Links are printed as their visible address (ATS-friendly and readable on paper), still clickable.
 function displayUrl(url: string): string {
   return url.replace(/^https?:\/\//i, "").replace(/^www\./i, "").replace(/\/+$/, "");
@@ -1088,7 +1111,8 @@ export async function buildPdfBufferWithMeta(
 ): Promise<PdfBufferWithMeta> {
   // Strip characters the built-in fonts cannot draw, and pick labels in the resume's language.
   const resumeData = sanitizeDeep(rawResumeData);
-  const labels = PDF_LABELS[detectResumeLanguage(resumeData)];
+  const lang = detectResumeLanguage(resumeData);
+  const labels = PDF_LABELS[lang];
   const theme: ResumeThemeConfig = styleConfig || DEFAULT_THEME_CONFIG;
   const fonts = getFontFamilyNames(theme.typography.fontFamily);
   const sizes = getFontSizes(theme.typography.fontSizeScale);
@@ -1308,19 +1332,14 @@ export async function buildPdfBufferWithMeta(
   const hiddenSections = new Set(theme.layout.hiddenSections || []);
   const customTitles = theme.layout.customSectionTitles || {};
 
-  const defaultTitles: Record<string, string> = {
-    summary: "PROFESSIONAL SUMMARY",
-    skills: "SKILLS",
-    experience: "PROFESSIONAL EXPERIENCE",
-    education: "EDUCATION",
-    projects: "PROJECTS",
-    certifications: "CERTIFICATIONS",
-    languages: "LANGUAGES",
-  };
+  const defaultTitles: Record<string, string> = lang === "pt" ? PT_SECTION_TITLES : EN_SECTION_TITLES;
 
   for (const section of sectionOrder) {
     if (hiddenSections.has(section as any)) continue;
-    const title = (customTitles[section as keyof typeof customTitles] || defaultTitles[section] || section).toUpperCase();
+    // Custom titles are kept unless they are Portuguese on an English resume (titles follow the content).
+    const custom = customTitles[section as keyof typeof customTitles];
+    const useCustom = custom && !(lang === "en" && looksPortuguese(custom));
+    const title = ((useCustom ? custom : undefined) || defaultTitles[section] || section).toUpperCase();
 
     switch (section) {
       case "summary":
