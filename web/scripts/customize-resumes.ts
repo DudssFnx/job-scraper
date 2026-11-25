@@ -242,7 +242,15 @@ async function runResumeCustomizer(ctx?: TelemetryContext) {
             ...customizedData,
           };
           const tailoredText = formatResumeToText(tailoredResumeObj);
-          const newScore = await scoreJobWithResume(tailoredText, job.description || "");
+          // Pass the full job object: passing only the description string made the rescore
+          // evaluate the tailored resume against an empty job ("N/A"), producing arbitrary scores.
+          const newScore = await scoreJobWithResume(tailoredText, {
+            job_id: job.job_id,
+            job_title: job.job_title,
+            company: job.company,
+            level: job.level,
+            description: job.description || "",
+          });
 
           if (newScore !== null) {
             const { error: scoreUpdateError } = await supabase
