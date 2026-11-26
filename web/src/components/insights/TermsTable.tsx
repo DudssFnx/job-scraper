@@ -9,7 +9,7 @@ export default function TermsTable({ rows, periodLabel }: { rows: TermRow[]; per
   return (
     <InsightsSection
       title="Por termo de busca"
-      subtitle={`Vagas coletadas ${periodLabel}. O termo é reconstruído a partir do log de cada scrape (o scraper não o grava na vaga).`}
+      subtitle={`Vagas coletadas ${periodLabel}. Frente e termo são reconstruídos a partir do log de cada scrape (o scraper não os grava na vaga).`}
       icon={<Search className="h-4 w-4" />}
       aside={
         low.length > 0 ? (
@@ -24,9 +24,10 @@ export default function TermsTable({ rows, periodLabel }: { rows: TermRow[]; per
         <EmptyState title="Sem vagas no período" />
       ) : (
         <div className="-mx-2 overflow-x-auto">
-          <table className="w-full min-w-[640px] text-sm">
+          <table className="w-full min-w-[760px] text-sm">
             <thead>
               <tr className="border-b border-gray-100 text-left text-[11px] font-semibold uppercase tracking-wide text-gray-400">
+                <th className="px-2 pb-2">Frente</th>
                 <th className="px-2 pb-2">Termo</th>
                 <th className="px-2 pb-2 text-right">Vagas</th>
                 <th className="w-44 px-2 pb-2">Nota média</th>
@@ -37,7 +38,8 @@ export default function TermsTable({ rows, periodLabel }: { rows: TermRow[]; per
             </thead>
             <tbody className="divide-y divide-gray-50">
               {rows.map((r) => (
-                <tr key={r.term} className={r.baixo ? "bg-amber-50/60" : undefined}>
+                <tr key={`${r.front}|${r.term}`} className={r.baixo ? "bg-amber-50/60" : undefined}>
+                  <td className="whitespace-nowrap px-2 py-2.5 text-xs text-gray-500">{r.front}</td>
                   <td className="px-2 py-2.5">
                     <span className={`font-medium ${r.configurado ? "text-gray-800" : "text-gray-500"}`}>{r.term}</span>
                     {!r.configurado && r.vagas > 0 && r.term !== REMOTEOK_TERM && r.term !== UNKNOWN_TERM && (

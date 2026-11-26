@@ -103,34 +103,82 @@ export function computeFunnel(jobs: InsightJob[]): FunnelStage[] {
 // ---------------------------------------------------------------- 2. Termos
 export const UNKNOWN_TERM = "Não identificado";
 export const REMOTEOK_TERM = "RemoteOK (feed, sem termo)";
+export const LEGACY_FRONT = "São Paulo (antes das frentes)";
+export const REMOTEOK_FRONT = "RemoteOK";
+export const UNKNOWN_FRONT = "Não identificada";
+
+export interface JobOrigin {
+  term: string;
+  front: string;
+}
 
 /**
- * O scraper não grava o termo na vaga. Reconstrói a origem a partir da telemetria
- * de cada scrape (automation_runs.log_output): a última URL com `keywords=` antes
- * de "job ID: <id>" é o termo que trouxe a vaga. Primeira atribuição vence.
+ * O scraper não grava termo nem frente na vaga. Reconstrói a origem a partir da telemetria
+ * de cada scrape (automation_runs.log_output): a última linha "[Frente] <nome> | local ..." e a
+ * última URL com `keywords=` antes de "job ID: <id>" dizem de onde a vaga veio. Scrapes
+ * anteriores às frentes ficam como LEGACY_FRONT. Primeira atribuição vence.
  */
-export function mapJobsToTerms(runs: ScrapeRunLog[]): Map<string, string> {
-  const map = new Map<string, string>();
+export function mapJobsToOrigins(runs: ScrapeRunLog[]): Map<string, JobOrigin> {
+  const map = new Map<string, JobOrigin>();
   const sorted = [...runs].sort((a, b) => a.started_at.localeCompare(b.started_at));
   for (const run of sorted) {
-    let current: string | null = null;
+    let term: string | null = null;
+    let front: string = LEGACY_FRONT;
     for (const line of (run.log_output || "").split("\n")) {
+      const fr = line.match(/\[Frente\] (.+?) \| local "/);
+      if (fr) front = fr[1].trim();
       const kw = line.match(/[?&]keywords=([^&\s]+)/);
       if (kw) {
         try {
-          current = decodeURIComponent(kw[1].replace(/\+/g, " ")).trim();
+          term = decodeURIComponent(kw[1].replace(/\+/g, " ")).trim();
         } catch {
-          current = kw[1];
+          term = kw[1];
         }
       }
       const id = line.match(/job ID: (\d+)/);
-      if (id && current && !map.has(id[1])) map.set(id[1], current);
+      if (id && term && !map.has(id[1])) map.set(id[1], { term, front });
     }
   }
   return map;
 }
 
+/** Compatibilidade: só o termo de cada vaga. */
+export function mapJobsToTerms(runs: ScrapeRunLog[]): Map<string, string> {
+  return new Map([...mapJobsToOrigins(runs)].map(([id, o]) => [id, o.term]));
+}
+
+export function originOf(job: InsightJob, origins: Map<string, JobOrigin>): JobOrigin {
+  return (
+    origins.get(job.job_id) ??
+    (job.provider === "remote_ok" ? { term: REMOTEOK_TERM, front: REMOTEOK_FRONT } : { term: UNKNOWN_TERM, front: UNKNOWN_FRONT })
+  );
+}
+
+export interface ConfiguredTerm {
+  front: string;
+  term: string;
+}
+
+export interface FrontFunnelRow {
+  front: string;
+  stages: FunnelStage[];
+}
+
+/** Funil por frente (mesmas etapas do funil geral). */
+export function computeFunnelByFront(jobs: InsightJob[], origins: Map<string, JobOrigin>): FrontFunnelRow[] {
+  const groups = new Map<string, InsightJob[]>();
+  for (const j of jobs) {
+    const f = originOf(j, origins).front;
+    if (!groups.has(f)) groups.set(f, []);
+    groups.get(f)!.push(j);
+  }
+  return [...groups.entries()]
+    .map(([front, list]) => ({ front, stages: computeFunnel(list) }))
+    .sort((a, b) => b.stages[0].value - a.stages[0].value || a.front.localeCompare(b.front));
+}
+
 export interface TermRow {
+  front: string;
   term: string;
   vagas: number;
   pontuadas: number;
@@ -142,21 +190,24 @@ export interface TermRow {
   configurado: boolean;
 }
 
-export function computeTerms(jobs: InsightJob[], termMap: Map<string, string>, configuredTerms: string[]): TermRow[] {
-  const groups = new Map<string, InsightJob[]>();
-  for (const t of configuredTerms) groups.set(t, []);
+export function computeTerms(jobs: InsightJob[], origins: Map<string, JobOrigin>, configuredTerms: ConfiguredTerm[]): TermRow[] {
+  const key = (front: string, term: string) => `${front}\u0000${term}`;
+  const groups = new Map<string, { front: string; term: string; list: InsightJob[] }>();
+  for (const c of configuredTerms) groups.set(key(c.front, c.term), { ...c, list: [] });
   for (const j of jobs) {
-    const term = termMap.get(j.job_id) ?? (j.provider === "remote_ok" ? REMOTEOK_TERM : UNKNOWN_TERM);
-    if (!groups.has(term)) groups.set(term, []);
-    groups.get(term)!.push(j);
+    const o = originOf(j, origins);
+    const k = key(o.front, o.term);
+    if (!groups.has(k)) groups.set(k, { front: o.front, term: o.term, list: [] });
+    groups.get(k)!.list.push(j);
   }
-  const configured = new Set(configuredTerms);
+  const configured = new Set(configuredTerms.map((c) => key(c.front, c.term)));
   const rows: TermRow[] = [];
-  for (const [term, list] of groups) {
+  for (const [k, { front, term, list }] of groups) {
     const scored = list.filter(isScored);
     const n70 = scored.filter((j) => (j.resume_score ?? 0) >= 70).length;
     const pct70 = scored.length ? Math.round((n70 / scored.length) * 100) : null;
     rows.push({
+      front,
       term,
       vagas: list.length,
       pontuadas: scored.length,
@@ -165,12 +216,12 @@ export function computeTerms(jobs: InsightJob[], termMap: Map<string, string>, c
       aplicadas: list.filter(isApplied).length,
       entrevistas: list.filter(isInterview).length,
       baixo: pct70 != null && pct70 < 10,
-      configurado: configured.has(term),
+      configurado: configured.has(k),
     });
   }
   return rows
     .filter((r) => r.vagas > 0 || r.configurado)
-    .sort((a, b) => b.vagas - a.vagas || a.term.localeCompare(b.term));
+    .sort((a, b) => a.front.localeCompare(b.front) || b.vagas - a.vagas || a.term.localeCompare(b.term));
 }
 
 // ---------------------------------------------------------------- 3. O que estudar

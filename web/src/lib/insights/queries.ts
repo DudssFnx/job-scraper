@@ -2,9 +2,12 @@
 import { promises as fs } from "fs";
 import path from "path";
 import { createSupabaseStaticClient } from "@/utils/supabase/server";
+import { parseSearchFronts } from "@/lib/scraper/fronts";
 import {
+  LEGACY_FRONT,
   lastNDays,
   parseIaLog,
+  type ConfiguredTerm,
   type InsightJob,
   type LogCounters,
   type RunMetrics,
@@ -52,16 +55,20 @@ export function getRunMetricsSince(sinceIso: string): Promise<RunMetrics[]> {
   );
 }
 
-export async function getConfiguredSearchTerms(): Promise<string[]> {
+/** (frente, termo) configurados: das frentes ativas; sem frentes, a lista única antiga. */
+export async function getConfiguredSearchTerms(): Promise<ConfiguredTerm[]> {
   const { data, error } = await createSupabaseStaticClient()
     .from("app_settings")
-    .select("linkedin_search_queries")
+    .select("linkedin_search_queries, search_locations")
     .order("updated_at", { ascending: false })
     .limit(1)
     .maybeSingle();
   if (error) throw new Error(`[insights] app_settings: ${error.message}`);
-  const q = (data as { linkedin_search_queries?: unknown } | null)?.linkedin_search_queries;
-  return Array.isArray(q) ? q.filter((t): t is string => typeof t === "string") : [];
+  const row = data as { linkedin_search_queries?: unknown; search_locations?: unknown } | null;
+  const fronts = parseSearchFronts(row?.search_locations).filter((f) => f.enabled);
+  if (fronts.length) return fronts.flatMap((f) => f.queries.map((term) => ({ front: f.label, term })));
+  const q = row?.linkedin_search_queries;
+  return Array.isArray(q) ? q.filter((t): t is string => typeof t === "string").map((term) => ({ front: LEGACY_FRONT, term })) : [];
 }
 
 /** Pasta dos logs do rodar-ia.bat (C:\dev\jobtrack\logs). O app roda a partir de web/. */

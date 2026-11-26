@@ -3,12 +3,13 @@ import {
   PERIODS,
   computeAutomation,
   computeFunnel,
+  computeFunnelByFront,
   computeSkillGaps,
   computeTerms,
   computeVelocity,
   filterByPeriod,
   isScored,
-  mapJobsToTerms,
+  mapJobsToOrigins,
   type PeriodKey,
 } from "@/lib/insights/compute";
 import {
@@ -21,6 +22,7 @@ import {
 } from "@/lib/insights/queries";
 import PeriodTabs from "@/components/insights/PeriodTabs";
 import FunnelChart from "@/components/insights/FunnelChart";
+import FunnelByFront from "@/components/insights/FunnelByFront";
 import TermsTable from "@/components/insights/TermsTable";
 import StudyGaps from "@/components/insights/StudyGaps";
 import AutomationChart from "@/components/insights/AutomationChart";
@@ -53,13 +55,15 @@ export default async function InsightsPage({
     getCustomizedResumeDates().catch(() => [] as string[]),
     getScrapeRunLogs().catch(() => []),
     getRunMetricsSince(since).catch(() => []),
-    getConfiguredSearchTerms().catch(() => [] as string[]),
+    getConfiguredSearchTerms().catch(() => []),
     getIaLogCounters(AUTOMATION_DAYS).catch(() => null),
   ]);
 
   const periodJobs = filterByPeriod(jobs, period);
   const funnel = computeFunnel(periodJobs);
-  const termRows = computeTerms(periodJobs, mapJobsToTerms(scrapeLogs), terms);
+  const origins = mapJobsToOrigins(scrapeLogs);
+  const termRows = computeTerms(periodJobs, origins, terms);
+  const frontRows = computeFunnelByFront(periodJobs, origins);
   const gaps = computeSkillGaps(periodJobs);
   const automation = computeAutomation(jobs, resumeDates, runMetrics, logs ?? new Map(), AUTOMATION_DAYS);
   const velocity = computeVelocity(periodJobs);
@@ -91,6 +95,9 @@ export default async function InsightsPage({
         </div>
         <div className="lg:col-span-2">
           <VelocityCard velocity={velocity} periodLabel={periodLabel} />
+        </div>
+        <div className="lg:col-span-5">
+          <FunnelByFront rows={frontRows} periodLabel={periodLabel} />
         </div>
         <div className="lg:col-span-3">
           <TermsTable rows={termRows} periodLabel={periodLabel} />
