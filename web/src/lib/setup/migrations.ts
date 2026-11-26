@@ -508,6 +508,18 @@ WHERE "status" = 'tailored' AND "is_active" = true;
 -- 2. Record migration
 INSERT INTO "public"."schema_migrations" ("version") VALUES ('20261114_01_heal_tailored_jobs_status') ON CONFLICT DO NOTHING;`,
   },
+  {
+    id: "20261126_01_scrape_title_filters",
+    title: "Scrape Title Filter Lists",
+    description:
+      "Adds editable title-filter lists for LinkedIn Phase 1. NULL keeps the built-in defaults; an empty array turns the rule off.",
+    sql: `-- 1. Title filter lists (NULL = built-in defaults)
+ALTER TABLE "public"."app_settings" ADD COLUMN IF NOT EXISTS "scrape_title_exclude" text[];
+ALTER TABLE "public"."app_settings" ADD COLUMN IF NOT EXISTS "scrape_title_exclude_stack" text[];
+
+-- 2. Record migration
+INSERT INTO "public"."schema_migrations" ("version") VALUES ('20261126_01_scrape_title_filters') ON CONFLICT DO NOTHING;`,
+  },
 ];
 
 /**

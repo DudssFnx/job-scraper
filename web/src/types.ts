@@ -306,6 +306,9 @@ export interface AppSettings {
   last_scraped_at?: string | null;
   dream_job_profile?: DreamJobProfile | null;
   search_locations?: SearchLocation[] | null;
+  /** NULL = built-in defaults (src/lib/scraper/title-filter.ts); [] = rule off */
+  scrape_title_exclude?: string[] | null;
+  scrape_title_exclude_stack?: string[] | null;
   setup_step?: number;
   setup_completed?: boolean;
   created_at?: string;

@@ -21,6 +21,7 @@ import {
 } from "../src/lib/scraper";
 import { withTelemetry } from "../src/lib/telemetry";
 import { parseSearchFronts, runLinkedInFronts } from "../src/lib/scraper/fronts";
+import { titleFilterSummary } from "../src/lib/scraper/title-filter";
 
 function sleep(ms: number) {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -250,6 +251,7 @@ async function runScraper(ctx?: any) {
   } else {
     console.log("\nℹ️ Skipping LinkedIn Scraping (disabled in arguments / settings).");
   }
+  if (activeSources.includes("linkedin")) console.log(`\n${titleFilterSummary()}`);
 
   // 2. CareersFuture Scraping
   if (activeSources.includes("careers_future")) {

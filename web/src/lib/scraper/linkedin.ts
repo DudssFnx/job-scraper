@@ -5,6 +5,12 @@ import { convertHtmlToMarkdown } from "./html-to-markdown";
 import { SupabaseClient } from "@supabase/supabase-js";
 import { getExistingJobsCache } from "./supabase-utils";
 import { resolveGeoLocation } from "../setup/geoLocations";
+import {
+  DEFAULT_TITLE_EXCLUDE,
+  DEFAULT_TITLE_EXCLUDE_STACK,
+  filterCandidatesByTitle,
+  recordTitleFilterSkips,
+} from "./title-filter";
 
 let linkedinSession: Impit | null = null;
 
@@ -373,11 +379,21 @@ export async function processLinkedInQuery(
   config: LinkedInConfig,
   limit?: number
 ): Promise<ScrapedJob[]> {
-  const candidateJobs = await fetchLinkedInJobIds(searchQuery, location, config);
-  if (candidateJobs.length === 0) {
+  const rawCandidates = await fetchLinkedInJobIds(searchQuery, location, config);
+  if (rawCandidates.length === 0) {
     console.log("[LinkedIn] No job candidates found in Phase 1. Skipping detail fetching.");
     return [];
   }
+
+  // Title filter runs before the limit, so the quota goes to jobs that fit.
+  const { kept: candidateJobs, skipped } = filterCandidatesByTitle(rawCandidates, {
+    exclude: config.titleExclude ?? DEFAULT_TITLE_EXCLUDE,
+    excludeStack: config.titleExcludeStack ?? DEFAULT_TITLE_EXCLUDE_STACK,
+  });
+  for (const s of skipped) console.log(`[Filtro] pulada: ${s.candidate.job_title} (termo ${s.term})`);
+  recordTitleFilterSkips(skipped);
+  console.log(`[Filtro] ${rawCandidates.length} candidata(s) da Fase 1, ${skipped.length} pulada(s) pelo titulo, ${candidateJobs.length} seguem.`);
+  if (candidateJobs.length === 0) return [];
 
   console.log("\n[LinkedIn] --- Starting Filtering Step: Checking against Supabase ---");
   const { existingIds, companyTitleKeys } = await getExistingJobsCache(supabase);
@@ -407,7 +423,7 @@ export async function processLinkedInQuery(
   }
 
   console.log(
-    `[LinkedIn] Phase 1 found ${candidateJobs.length} total candidates. ` +
+    `[LinkedIn] Phase 1 kept ${candidateJobs.length} candidates after the title filter. ` +
     `Filtered against Supabase: ${skippedById} skipped by existing ID, ${skippedByCombo} skipped by company/title duplicate.`
   );
   console.log(`[LinkedIn] Identified ${newCandidatesToProcess.length} genuinely new jobs to fetch details for.`);

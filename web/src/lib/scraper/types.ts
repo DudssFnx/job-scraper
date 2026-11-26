@@ -43,6 +43,9 @@ export interface LinkedInConfig {
   jobType: string;
   jobPostingDate: string;
   f_WT: string;
+  /** Phase 1 title filter (app_settings.scrape_title_exclude / scrape_title_exclude_stack). */
+  titleExclude?: string[];
+  titleExcludeStack?: string[];
 }
 
 export interface CareersFutureConfig {

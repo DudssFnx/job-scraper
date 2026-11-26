@@ -2,6 +2,7 @@ import { SupabaseClient } from "@supabase/supabase-js";
 import { ScrapedJob, LinkedInConfig, CareersFutureConfig } from "./types";
 import { DreamJobProfile, SearchLocation } from "@/types";
 import { resolveGeoLocation } from "../setup/geoLocations";
+import { DEFAULT_TITLE_EXCLUDE, DEFAULT_TITLE_EXCLUDE_STACK, resolveTermList } from "./title-filter";
 
 export interface LoadedScraperSettings {
   scrapingSources: string[];
@@ -35,6 +36,8 @@ export const DEFAULT_LINKEDIN_CONFIG: LinkedInConfig = {
   jobType: "F",
   jobPostingDate: "r86400",
   f_WT: "1,2,3",
+  titleExclude: [...DEFAULT_TITLE_EXCLUDE],
+  titleExcludeStack: [...DEFAULT_TITLE_EXCLUDE_STACK],
 };
 
 export const DEFAULT_CAREERS_FUTURE_CONFIG: CareersFutureConfig = {
@@ -160,6 +163,8 @@ export async function loadScraperSettings(
         jobType: data.linkedin_job_type || DEFAULT_LINKEDIN_CONFIG.jobType,
         jobPostingDate: data.linkedin_job_posting_date || DEFAULT_LINKEDIN_CONFIG.jobPostingDate,
         f_WT: data.linkedin_f_wt || DEFAULT_LINKEDIN_CONFIG.f_WT,
+        titleExclude: resolveTermList(data.scrape_title_exclude, DEFAULT_TITLE_EXCLUDE),
+        titleExcludeStack: resolveTermList(data.scrape_title_exclude_stack, DEFAULT_TITLE_EXCLUDE_STACK),
       },
       careersFutureQueries: data.careers_future_search_queries || [],
       careersFutureConfig: {

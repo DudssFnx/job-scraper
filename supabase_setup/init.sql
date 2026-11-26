@@ -834,6 +834,8 @@ ALTER TABLE "public"."app_settings" ADD COLUMN IF NOT EXISTS "llm_daily_request_
 ALTER TABLE "public"."app_settings" ADD COLUMN IF NOT EXISTS "dream_job_profile" jsonb DEFAULT '{}'::jsonb;
 ALTER TABLE "public"."app_settings" ADD COLUMN IF NOT EXISTS "search_locations" jsonb DEFAULT '[]'::jsonb;
 ALTER TABLE "public"."app_settings" ADD COLUMN IF NOT EXISTS "job_search_mode" text DEFAULT 'get_hired_fast';
+ALTER TABLE "public"."app_settings" ADD COLUMN IF NOT EXISTS "scrape_title_exclude" text[];
+ALTER TABLE "public"."app_settings" ADD COLUMN IF NOT EXISTS "scrape_title_exclude_stack" text[];
 
 -- Seed singleton default configuration if no row exists
 INSERT INTO "public"."app_settings" (id)
