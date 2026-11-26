@@ -74,6 +74,20 @@ test("filterCandidatesByTitle separa mantidas e puladas", () => {
   assert.deepEqual(r.skipped.map((s) => [s.candidate.job_id, s.rule]), [["2", "stack"], ["4", "titulo"]]);
 });
 
+test("repetida no mesmo lote: so a primeira fica", () => {
+  const r = filterCandidatesByTitle(
+    [
+      { job_id: "1", job_title: "Desenvolvedor Fullstack", company: "Acme", location: null },
+      { job_id: "2", job_title: "Desenvolvedor  fullstack", company: "ACME", location: null },
+      { job_id: "3", job_title: "Desenvolvedor Fullstack", company: "Outra", location: null },
+      { job_id: "4", job_title: "Senior Developer", company: "Acme", location: null },
+    ],
+    rules,
+  );
+  assert.deepEqual(r.kept.map((c) => c.job_id), ["1", "3"]);
+  assert.deepEqual(r.skipped.map((s) => [s.candidate.job_id, s.rule]), [["2", "repetida"], ["4", "titulo"]]);
+});
+
 test("lista do app_settings: null usa o padrao, [] desliga", () => {
   assert.deepEqual(resolveTermList(null, ["a"]), ["a"]);
   assert.deepEqual(resolveTermList([], ["a"]), []);

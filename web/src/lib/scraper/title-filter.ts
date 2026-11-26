@@ -20,7 +20,7 @@ export interface TitleFilterRules {
   excludeStack: string[];
 }
 
-export type TitleFilterRule = "titulo" | "stack";
+export type TitleFilterRule = "titulo" | "stack" | "repetida";
 
 export interface TitleFilterResult {
   kept: CandidateJob[];
@@ -63,15 +63,28 @@ export function titleExclusion(title: string, rules: TitleFilterRules): { rule: 
   return null;
 }
 
+/** Same company + same title inside one search batch: only the first one stays. */
+function batchKey(c: CandidateJob): string | null {
+  if (!c.company || !c.job_title) return null;
+  return `${normalizeTitle(c.company.trim())}:::${normalizeTitle(c.job_title.trim()).replace(/\s+/g, " ")}`;
+}
+
 export function filterCandidatesByTitle(candidates: CandidateJob[], rules: TitleFilterRules): TitleFilterResult {
   const kept: CandidateJob[] = [];
   const skipped: TitleFilterResult["skipped"] = [];
+  const seen = new Set<string>();
   for (const c of candidates) {
     const hit = c.job_title ? titleExclusion(c.job_title, rules) : null;
     if (hit) {
       skipped.push({ candidate: c, ...hit });
       continue;
     }
+    const key = batchKey(c);
+    if (key && seen.has(key)) {
+      skipped.push({ candidate: c, rule: "repetida", term: "mesma empresa + titulo" });
+      continue;
+    }
+    if (key) seen.add(key);
     kept.push(c);
   }
   return { kept, skipped };
@@ -84,7 +97,7 @@ export function resolveTermList(raw: unknown, fallback: string[]): string[] {
 }
 
 // Run-wide counters, printed once at the end of the LinkedIn scrape.
-const runStats: Record<TitleFilterRule, number> = { titulo: 0, stack: 0 };
+const runStats: Record<TitleFilterRule, number> = { titulo: 0, stack: 0, repetida: 0 };
 const runTerms = new Map<string, number>();
 
 export function recordTitleFilterSkips(skipped: TitleFilterResult["skipped"]): void {
@@ -96,9 +109,9 @@ export function recordTitleFilterSkips(skipped: TitleFilterResult["skipped"]): v
 }
 
 export function titleFilterSummary(): string {
-  const total = runStats.titulo + runStats.stack;
+  const total = runStats.titulo + runStats.stack + runStats.repetida;
   const lines = [
-    `[Filtro] Resumo do lote: ${total} pulada(s) | titulo (senioridade/idioma/cargo): ${runStats.titulo} | stack: ${runStats.stack}`,
+    `[Filtro] Resumo do lote: ${total} pulada(s) | titulo (senioridade/idioma/cargo): ${runStats.titulo} | stack: ${runStats.stack} | repetida no lote: ${runStats.repetida}`,
   ];
   for (const [k, v] of [...runTerms.entries()].sort((a, b) => b[1] - a[1])) lines.push(`  - ${k}: ${v}`);
   return lines.join("\n");

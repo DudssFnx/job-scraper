@@ -390,9 +390,10 @@ export async function processLinkedInQuery(
     exclude: config.titleExclude ?? DEFAULT_TITLE_EXCLUDE,
     excludeStack: config.titleExcludeStack ?? DEFAULT_TITLE_EXCLUDE_STACK,
   });
-  for (const s of skipped) console.log(`[Filtro] pulada: ${s.candidate.job_title} (termo ${s.term})`);
+  for (const s of skipped)
+    console.log(`[Filtro] pulada: ${s.candidate.job_title} (${s.rule === "repetida" ? "repetida no lote" : `termo ${s.term}`})`);
   recordTitleFilterSkips(skipped);
-  console.log(`[Filtro] ${rawCandidates.length} candidata(s) da Fase 1, ${skipped.length} pulada(s) pelo titulo, ${candidateJobs.length} seguem.`);
+  console.log(`[Filtro] ${rawCandidates.length} candidata(s) da Fase 1, ${skipped.length} pulada(s) pelo filtro, ${candidateJobs.length} seguem.`);
   if (candidateJobs.length === 0) return [];
 
   console.log("\n[LinkedIn] --- Starting Filtering Step: Checking against Supabase ---");
