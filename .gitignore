@@ -30,3 +30,10 @@ logs/
 
 # Projetos ainda fora do currículo (rascunho local)
 web/scripts/_projetos-futuros.json
+
+# Arquivos locais do JobTrack (dados pessoais, nunca versionar)
+candidaturas/
+candidate-constraints.local.json
+MANUAL-JOBTRACK.md
+web/scripts/_backup-*.json
+web/scripts/_audit-tailored.ts
